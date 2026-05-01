@@ -1,5 +1,6 @@
 import { Colors } from "@/constants/theme";
-import { addNote } from "@/db/crudOperations";
+import { addNote, getSetting } from "@/db/crudOperations";
+import { syncLocalDataToSupabase } from "@/services/sync";
 import { Ionicons } from "@expo/vector-icons";
 import { router, Stack } from "expo-router";
 import { useState } from "react";
@@ -37,7 +38,12 @@ export default function CreateNoteScreen() {
     if (!canSave) return;
     const newNote = { title, category, content };
     addNote(newNote);
-    console.log("Creating note:", { title, content, category });
+
+    const userId = getSetting("user_id");
+    if (userId && userId !== "null") {
+      syncLocalDataToSupabase(userId).catch(console.error);
+    }
+
     router.back();
   };
 

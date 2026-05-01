@@ -1,13 +1,15 @@
 import { ThemedText } from "@/components/themed-text";
+import { Toast, useToast } from "@/components/UI/toast";
+// import { Toast, useToast } from "@/components/toast";
 import { Colors } from "@/constants/theme";
 import { saveSetting } from "@/db/crudOperations";
 import { supabase } from "@/services/supabase";
+import { pullFromSupabase, syncLocalDataToSupabase } from "@/services/sync";
 import { Ionicons } from "@expo/vector-icons";
 import { Link, router } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -30,6 +32,8 @@ export default function LoginScreen() {
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
 
+  const { show: showToast, toastProps } = useToast();
+
   const isFormValid = email.trim().length > 0 && password.length > 0;
 
   const handleLogin = async () => {
@@ -37,7 +41,11 @@ export default function LoginScreen() {
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      Alert.alert("Invalid Email", "Please enter a valid email address.");
+      showToast(
+        "warning",
+        "Invalid email",
+        "That doesn't look right. Try something like you@example.com.",
+      );
       return;
     }
 
@@ -49,19 +57,47 @@ export default function LoginScreen() {
       });
 
       if (error) {
-        Alert.alert("Login Failed", error.message);
+        showToast(
+          "error",
+          "Login failed",
+          "We couldn't find an account with those details. Double-check and try again.",
+        );
         return;
       }
 
       const userId = data.user?.id;
       if (userId) {
-        // Save user_id locally so the rest of the app can use it
         saveSetting("user_id", userId);
       }
 
+      await syncLocalDataToSupabase(userId);
+      await pullFromSupabase(userId);
+
+      // --- DEBUG LOG: Fetch and display user's goals from Supabase ---
+      const { data: goals, error: goalsError } = await supabase
+        .from("goals")
+        .select("*")
+        .eq("user_id", userId);
+
+      if (goalsError) {
+        console.warn("⚠️ Could not fetch goals for log:", goalsError.message);
+      } else {
+        console.log("✅ Logged-in user:", data.user?.email);
+        console.log(
+          `📋 Goals in Supabase (${goals.length} total):`,
+          JSON.stringify(goals, null, 2),
+        );
+      }
+      // --- END DEBUG LOG ---
+
       router.replace("/(tabs)");
     } catch (error) {
-      Alert.alert("Login Failed", "Something went wrong. Please try again.");
+      showToast(
+        "error",
+        "Something went wrong",
+        "We hit an unexpected error. Please try again in a moment.",
+      );
+      console.log(error);
     } finally {
       setLoading(false);
     }
@@ -72,7 +108,11 @@ export default function LoginScreen() {
       // TODO: replace with your Google OAuth implementation
       console.log("Google log in");
     } catch (error) {
-      Alert.alert("Google Login Failed", "Please try again.");
+      showToast(
+        "error",
+        "Google login failed",
+        "Couldn't connect with Google. Please try again.",
+      );
     }
   };
 
@@ -81,7 +121,11 @@ export default function LoginScreen() {
       // TODO: replace with expo-apple-authentication
       console.log("Apple log in");
     } catch (error) {
-      Alert.alert("Apple Login Failed", "Please try again.");
+      showToast(
+        "error",
+        "Apple login failed",
+        "Couldn't connect with Apple. Please try again.",
+      );
     }
   };
 
@@ -90,6 +134,8 @@ export default function LoginScreen() {
       style={styles.keyboardAvoid}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
+      <Toast {...toastProps} />
+
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
@@ -111,7 +157,7 @@ export default function LoginScreen() {
             <TextInput
               style={[styles.input, emailFocused && styles.inputFocused]}
               placeholder="you@example.com"
-              placeholderTextColor={c.muted}
+              placeholderTextColor={c.placeHolder}
               value={email}
               onChangeText={setEmail}
               onFocus={() => setEmailFocused(true)}
@@ -129,7 +175,7 @@ export default function LoginScreen() {
             <TextInput
               style={[styles.input, passwordFocused && styles.inputFocused]}
               placeholder="Enter your password"
-              placeholderTextColor={c.muted}
+              placeholderTextColor={c.placeHolder}
               value={password}
               onChangeText={setPassword}
               onFocus={() => setPasswordFocused(true)}
@@ -294,7 +340,7 @@ const useStyles = (scheme: "light" | "dark") => {
     },
     dividerText: {
       fontSize: 12,
-      color: c.muted,
+      color: c.mutedForeground,
       fontWeight: "500",
     },
 
@@ -329,7 +375,7 @@ const useStyles = (scheme: "light" | "dark") => {
     },
     footerText: {
       fontSize: 14,
-      color: c.muted,
+      color: c.mutedForeground,
     },
     footerLink: {
       fontSize: 14,

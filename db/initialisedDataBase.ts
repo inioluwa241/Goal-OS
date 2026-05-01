@@ -1,8 +1,10 @@
 import db from "./localDataBase";
 
 export function initialisedDb() {
+  db.execSync(`PRAGMA journal_mode = WAL;`);
+  db.execSync(`PRAGMA foreign_keys = ON;`);
   db.withTransactionSync(() => {
-    //   db.execSync(`
+    // db.execSync(`
     //   DROP TABLE IF EXISTS goals;
     //   DROP TABLE IF EXISTS goal_reflections;
     //   DROP TABLE IF EXISTS notes;
@@ -17,8 +19,6 @@ export function initialisedDb() {
     // `);
 
     db.execSync(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA foreign_keys = ON;
 
     CREATE TABLE IF NOT EXISTS goals (
       id TEXT PRIMARY KEY,

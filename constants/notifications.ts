@@ -1,86 +1,254 @@
 import * as Notifications from "expo-notifications";
-import { Platform } from "react-native";
+import { NativeModules, Platform } from "react-native";
 
-// ✅ controls how notifications appear when app is foregrounded
+// ── Notification handler ───────────────────────────────────────────────────────
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
-    shouldShowBanner: true, // ✅ add this
-    shouldShowList: true, // ✅ add this
   }),
 });
 
-// ✅ request permissions (Android 13+ needs explicit permission)
-export async function requestNotificationPermissions(): Promise<boolean> {
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
-  let finalStatus = existingStatus;
+// ── Channel IDs ────────────────────────────────────────────────────────────────
+const ALARM_CHANNEL_ID = "goalos_alarms";
+const REMINDER_CHANNEL_ID = "goalos_reminders";
 
-  if (existingStatus !== "granted") {
-    const { status } = await Notifications.requestPermissionsAsync({
-      ios: {
-        allowAlert: true,
-        allowSound: true,
-        allowBadge: true,
-        allowCriticalAlerts: true, // ← this is the closest iOS gets to DND bypass
-      },
-    });
-    finalStatus = status;
-  }
+const WallpaperModule = NativeModules.WallpaperModule ?? null;
+const AlarmChannel = NativeModules.AlarmChannel ?? null;
 
-  return finalStatus === "granted";
+// Track which vision view to show next (cycles 0→1→2→0)
+let visionCycle = 0;
+
+function setNextVisionWallpaper() {
+  if (Platform.OS !== "android" || !WallpaperModule) return;
+  if (visionCycle === 0) WallpaperModule.setVisionImagesWallpaper();
+  else if (visionCycle === 1) WallpaperModule.setVisionTextWallpaper("[]");
+  else WallpaperModule.setVisionGridWallpaper();
+  visionCycle = (visionCycle + 1) % 3;
 }
 
-// ✅ schedule the morning brief alarm
+// ── Setup channels ─────────────────────────────────────────────────────────────
+export async function setupNotificationChannels() {
+  if (Platform.OS !== "android") return;
+
+  if (!AlarmChannel) {
+    console.warn("AlarmChannel native module not available, skipping...");
+  } else {
+    AlarmChannel.createAlarmChannel();
+
+    const hasAccess: boolean = await AlarmChannel.isDndAccessGranted();
+    if (!hasAccess) {
+      console.log("DND access not granted — opening system settings...");
+      await AlarmChannel.requestDndAccess();
+    }
+  }
+
+  await Notifications.setNotificationChannelAsync(REMINDER_CHANNEL_ID, {
+    name: "Reminders",
+    importance: Notifications.AndroidImportance.HIGH,
+    sound: "default",
+    bypassDnd: false,
+    vibrationPattern: [0, 250, 250, 250],
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    enableVibrate: true,
+  });
+}
+
+// ── Request permissions ────────────────────────────────────────────────────────
+export async function requestNotificationPermissions(): Promise<boolean> {
+  const { status: existingStatus } = await Notifications.getPermissionsAsync();
+  if (existingStatus === "granted") return true;
+
+  const { status } = await Notifications.requestPermissionsAsync({
+    ios: {
+      allowAlert: true,
+      allowSound: true,
+      allowBadge: true,
+      allowCriticalAlerts: true,
+    },
+  });
+
+  return status === "granted";
+}
+
+// ── Schedule morning alarm — fires once daily at set time ──────────────────────
 export async function scheduleMorningAlarm(
   time: string,
 ): Promise<string | null> {
-  // cancel any existing morning alarm first
   await cancelMorningAlarm();
 
   const granted = await requestNotificationPermissions();
-  if (!granted) {
-    console.warn("Notification permission not granted");
-    return null;
+  if (!granted) return null;
+
+  const [hours, minutes] = time.split(":").map(Number);
+
+  if (Platform.OS === "android" && WallpaperModule) {
+    WallpaperModule.setMorningWallpaper();
   }
 
-  // parse "HH:MM" string
-  const [hours, minutes] = time.split(":").map(Number);
+  // 9am revert to vision board — fixed: added data so listener handles it
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: "Goal OS",
+      body: "Vision board activated",
+      data: { type: "vision_rotation", action: "grid" }, // ← fix 1
+      sound: false,
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour: 9,
+      minute: 0,
+      channelId: REMINDER_CHANNEL_ID,
+    },
+  });
 
   const id = await Notifications.scheduleNotificationAsync({
     content: {
       title: "☀️ Good Morning!",
       body: "Your morning brief is ready. Let's crush today's goals.",
-      sound: "alarm.wav", // must be in assets and registered in app.json
+      sound: "alarm.wav",
       priority: Notifications.AndroidNotificationPriority.MAX,
-      // Android DND bypass
-      ...(Platform.OS === "android" && {
-        categoryIdentifier: "alarm",
-      }),
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.DAILY,
       hour: hours,
       minute: minutes,
+      channelId: ALARM_CHANNEL_ID,
     },
   });
 
-  console.log("Morning alarm scheduled with id:", id);
   return id;
 }
 
-// ✅ cancel the morning alarm
+// ── Schedule reminder — fires at set time then every 4 hours ───────────────────
+export async function scheduleReminder(
+  title: string,
+  hour: number,
+  minute: number,
+  goalData?: {
+    title: string;
+    progress: number;
+    deadline: string;
+    quote: string;
+  },
+): Promise<string[]> {
+  const granted = await requestNotificationPermissions();
+  if (!granted) return [];
+
+  const ids: string[] = [];
+
+  for (let i = 0; i < 3; i++) {
+    const triggerHour = (hour + i * 8) % 24;
+
+    const id = await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "⏰ Goal OS Reminder",
+        body: goalData?.title ?? title,
+        sound: "alarm.wav",
+        priority: Notifications.AndroidNotificationPriority.MAX,
+        data: goalData ?? {},
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.DAILY,
+        hour: triggerHour,
+        minute,
+        channelId: ALARM_CHANNEL_ID,
+      },
+    });
+
+    ids.push(id);
+  }
+
+  return ids;
+}
+
+// ── Cancel morning alarm ───────────────────────────────────────────────────────
 export async function cancelMorningAlarm() {
-  // we tag it so we can cancel specifically this one
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-  const morningAlarm = scheduled.find(
-    (n) => n.content.title === "☀️ Good Morning!",
-  );
-  if (morningAlarm) {
-    await Notifications.cancelScheduledNotificationAsync(
-      morningAlarm.identifier,
-    );
+  const alarm = scheduled.find((n) => n.content.title === "☀️ Good Morning!");
+  if (alarm) {
+    await Notifications.cancelScheduledNotificationAsync(alarm.identifier);
     console.log("Morning alarm cancelled");
   }
+}
+
+// ── Cancel one notification by id ─────────────────────────────────────────────
+export async function cancelNotification(id: string) {
+  await Notifications.cancelScheduledNotificationAsync(id);
+}
+
+// ── Cancel all notifications for a reminder (array of ids) ────────────────────
+export async function cancelReminderNotifications(ids: string[]) {
+  await Promise.all(ids.map(cancelNotification));
+}
+
+export function setupWallpaperOnNotification() {
+  Notifications.addNotificationReceivedListener((notification) => {
+    if (Platform.OS !== "android" || !WallpaperModule) return;
+
+    const title = notification.request.content.title;
+    const data = notification.request.content.data as any;
+
+    // app is foregrounded — call module directly, this is fine
+    if (title === "☀️ Good Morning!") {
+      WallpaperModule.setMorningWallpaper();
+    } else if (data?.type === "vision_rotation") {
+      if (data.action === "grid") WallpaperModule.setVisionGridWallpaper();
+      else if (data.action === "images")
+        WallpaperModule.setVisionImagesWallpaper();
+    } else if (title === "⏰ Goal OS Reminder" && data?.title) {
+      WallpaperModule.setGoalWallpaper(
+        data.title,
+        data.progress ?? 0,
+        data.deadline ?? "No deadline",
+        data.quote ?? "You have the power to make today extraordinary.",
+      );
+      setTimeout(() => WallpaperModule.revertWallpaper(), 30 * 60 * 1000);
+    }
+  });
+}
+// ── Schedule evening grid + 1am revert ────────────────────────────────────────
+export async function scheduleVisionRotation() {
+  // fix 2: removed shadowed `const { WallpaperModule } = NativeModules` that was here
+
+  const all = await Notifications.getAllScheduledNotificationsAsync();
+  for (const n of all) {
+    if (n.content.data?.type === "vision_rotation") {
+      await Notifications.cancelScheduledNotificationAsync(n.identifier);
+    }
+  }
+
+  // 7pm — switch to grid
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: "Goal OS",
+      body: "",
+      data: { type: "vision_rotation", action: "grid" },
+      sound: false,
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour: 19,
+      minute: 0,
+      channelId: REMINDER_CHANNEL_ID,
+    },
+  });
+
+  // 1am — revert to vision images
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: "Goal OS",
+      body: "",
+      data: { type: "vision_rotation", action: "images" },
+      sound: false,
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour: 1,
+      minute: 0,
+      channelId: REMINDER_CHANNEL_ID,
+    },
+  });
 }

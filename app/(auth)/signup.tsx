@@ -1,4 +1,5 @@
 import { ThemedText } from "@/components/themed-text";
+import { Toast, useToast } from "@/components/UI/toast";
 import { Colors } from "@/constants/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { Link, router } from "expo-router";
@@ -10,7 +11,6 @@ import { syncLocalDataToSupabase } from "@/services/sync";
 
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -27,37 +27,58 @@ export default function SignUpScreen() {
   const styles = useStyles(scheme);
   const c = Colors[scheme];
 
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const [fullNameFocused, setFullNameFocused] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
 
-  const isFormValid = email.trim().length > 0 && password.length >= 8;
+  const { show: showToast, toastProps } = useToast();
+
+  const isFormValid =
+    fullName.trim().length > 0 &&
+    email.trim().length > 0 &&
+    password.length >= 8;
 
   const handleSignUp = async () => {
     if (!isFormValid) return;
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      Alert.alert("Invalid Email", "Please enter a valid email address.");
+      showToast(
+        "warning",
+        "Invalid email",
+        "That doesn't look right. Try something like you@example.com.",
+      );
       return;
     }
 
     setLoading(true);
     try {
-      const { data, error } = await supabase.auth.signUp({ email, password });
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: fullName.trim(), // feeds into the profiles trigger
+          },
+        },
+      });
 
       if (error) {
-        Alert.alert("Sign Up Failed", error.message);
+        showToast("error", "Sign up failed", error.message);
         return;
       }
 
       const userId = data.user?.id;
       if (!userId) {
-        Alert.alert(
-          "Sign Up Failed",
-          "Could not retrieve user. Please try again.",
+        showToast(
+          "error",
+          "Sign up failed",
+          "Couldn't create your account. Please try again in a moment.",
         );
         return;
       }
@@ -70,7 +91,11 @@ export default function SignUpScreen() {
 
       router.replace("/(tabs)");
     } catch (error) {
-      Alert.alert("Sign Up Failed", "Something went wrong. Please try again.");
+      showToast(
+        "error",
+        "Something went wrong",
+        "We hit an unexpected error. Please try again in a moment.",
+      );
     } finally {
       setLoading(false);
     }
@@ -81,7 +106,11 @@ export default function SignUpScreen() {
       // TODO: replace with your Google OAuth implementation
       console.log("Google sign up");
     } catch (error) {
-      Alert.alert("Google Sign Up Failed", "Please try again.");
+      showToast(
+        "error",
+        "Google sign up failed",
+        "Couldn't connect with Google. Please try again.",
+      );
     }
   };
 
@@ -90,7 +119,11 @@ export default function SignUpScreen() {
       // TODO: replace with expo-apple-authentication
       console.log("Apple sign up");
     } catch (error) {
-      Alert.alert("Apple Sign Up Failed", "Please try again.");
+      showToast(
+        "error",
+        "Apple sign up failed",
+        "Couldn't connect with Apple. Please try again.",
+      );
     }
   };
 
@@ -99,6 +132,8 @@ export default function SignUpScreen() {
       style={styles.keyboardAvoid}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
+      <Toast {...toastProps} />
+
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
@@ -114,13 +149,30 @@ export default function SignUpScreen() {
 
         {/* Form */}
         <View style={styles.form}>
+          {/* Full Name */}
+          <View style={styles.fieldGroup}>
+            <Text style={styles.label}>Full Name</Text>
+            <TextInput
+              style={[styles.input, fullNameFocused && styles.inputFocused]}
+              placeholder="John Doe"
+              placeholderTextColor={c.placeHolder}
+              value={fullName}
+              onChangeText={setFullName}
+              onFocus={() => setFullNameFocused(true)}
+              onBlur={() => setFullNameFocused(false)}
+              autoCapitalize="words"
+              autoCorrect={false}
+              returnKeyType="next"
+            />
+          </View>
+
           {/* Email */}
           <View style={styles.fieldGroup}>
             <Text style={styles.label}>Email</Text>
             <TextInput
               style={[styles.input, emailFocused && styles.inputFocused]}
               placeholder="you@example.com"
-              placeholderTextColor="#666"
+              placeholderTextColor={c.placeHolder}
               value={email}
               onChangeText={setEmail}
               onFocus={() => setEmailFocused(true)}
@@ -138,7 +190,7 @@ export default function SignUpScreen() {
             <TextInput
               style={[styles.input, passwordFocused && styles.inputFocused]}
               placeholder="At least 8 characters"
-              placeholderTextColor="#666"
+              placeholderTextColor={c.placeHolder}
               value={password}
               onChangeText={setPassword}
               onFocus={() => setPasswordFocused(true)}
@@ -229,15 +281,6 @@ const useStyles = (scheme: "light" | "dark") => {
       paddingBottom: 32,
       gap: 6,
     },
-    appTitle: {
-      fontSize: 24,
-      fontWeight: "700",
-      color: c.foreground,
-    },
-    subtitle: {
-      fontSize: 14,
-      color: c.muted,
-    },
 
     // Form
     form: {
@@ -297,7 +340,7 @@ const useStyles = (scheme: "light" | "dark") => {
     },
     dividerText: {
       fontSize: 12,
-      color: c.muted,
+      color: c.mutedForeground,
       fontWeight: "500",
     },
 
@@ -332,7 +375,7 @@ const useStyles = (scheme: "light" | "dark") => {
     },
     footerText: {
       fontSize: 14,
-      color: c.muted,
+      color: c.mutedForeground,
     },
     footerLink: {
       fontSize: 14,

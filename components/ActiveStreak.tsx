@@ -1,5 +1,5 @@
 import { Colors } from "@/constants/theme";
-import { getAllForStreak } from "@/db/crudOperations";
+import { getAllForStreak, recalculateStreaks } from "@/db/crudOperations";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
@@ -25,12 +25,12 @@ const ActiveStreak = function () {
   const [streaks, setStreaks] = useState<Streaks[]>([]);
 
   useEffect(() => {
-    // 1. Create an async wrapper
     async function loadStreak() {
       try {
+        recalculateStreaks();
         const stuff = await getAllForStreak();
-        setStreaks(stuff);
-        console.log(stuff);
+        // only show goals that actually have an active streak
+        setStreaks(stuff.filter((g) => g.streak > 0));
       } catch (e) {
         console.error("Failed to load streaks", e);
       }
@@ -38,6 +38,8 @@ const ActiveStreak = function () {
 
     loadStreak();
   }, []);
+
+  if (streaks.length === 0) return null;
 
   return (
     <View style={styles.activeStreak}>
@@ -49,7 +51,7 @@ const ActiveStreak = function () {
             style={styles.streakCard}
             onPress={() =>
               router.push({
-                pathname: "/goals/[id]/",
+                pathname: "/goals/[id]",
                 params: { id: each.id },
               })
             }
@@ -80,7 +82,7 @@ const useStyles = (scheme: "light" | "dark") => {
     },
     streakLIst: {
       flexDirection: "row",
-      gap: "10",
+      gap: 10,
       marginVertical: 10,
     },
     streakCard: {

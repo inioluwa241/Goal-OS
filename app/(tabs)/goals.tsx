@@ -2,8 +2,13 @@ import GoalsFilterBar from "@/components/GoalsFilterBar";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import ProgressRing from "@/components/UI/ProgressRing";
+import { getRelativeDate } from "@/constants/format_date";
 import { Colors } from "@/constants/theme";
-import { getGoals } from "@/db/crudOperations";
+import {
+  getAllForDailyTitle,
+  getGoals,
+  getGoalTitleById,
+} from "@/db/crudOperations";
 import { Ionicons } from "@expo/vector-icons";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { router } from "expo-router";
@@ -22,13 +27,12 @@ type Goal = {
   title: string;
   description: string | null;
   type: number;
-  parent_id: number | null; // Match the DB name!
+  parent_id: number | null;
   reason: string | null;
-  due_date: string | null; // Match the DB name!
-  enable_reminder: number; // Remember, this is 0 or 1
+  due_date: string | null;
+  enable_reminder: number;
   status: string;
   progress_value: number;
-  // ... add others if you need them
 };
 
 const Goals = function () {
@@ -39,74 +43,118 @@ const Goals = function () {
 
   const [selectedLabel, setSelectedLabel] = useState<number>(0);
   const [goals, setGoals] = useState<Goal[]>([]);
-
-  const allGoals = getGoals() as Goal[];
-
   const labels = ["", "Daily", "Weekly", "Monthly", "Yearly"];
 
   useEffect(() => {
-    setGoals([...allGoals].reverse());
+    try {
+      const allGoals = getGoals() as Goal[];
+      const stuff = getAllForDailyTitle();
+      const reversed = [...allGoals].reverse();
 
-    if (selectedLabel !== 0) {
-      setGoals(allGoals.filter((each) => each.type === selectedLabel));
-    }
-  }, [allGoals, selectedLabel]);
-
-  // const OPTIONS = goals.filter((each) => each.type?.toLowerCase() === type);
-
-  const renderItem = ({ item }: { item: Goal }) => (
-    <TouchableOpacity
-      onPress={() =>
-        router.push({
-          pathname: "/goals/[id]/",
-          params: { id: item.id },
-        })
+      if (selectedLabel !== 0) {
+        setGoals(allGoals.filter((each) => each.type === selectedLabel));
+      } else {
+        setGoals(reversed);
       }
-    >
-      <View key={item.id} style={styles.goalCard}>
-        <View style={styles.dualHorizontal}>
-          <View>
-            <ProgressRing
-              size={85}
-              thickness={4}
-              color={c.accent}
-              progress={Number(item.progress_value / 100)}
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <View style={styles.firstHori}>
-              <ThemedText
-                textType="default"
-                style={{
-                  fontWeight: "600",
-                  flexWrap: "wrap",
-                  marginRight: 8,
-                  flexShrink: 1,
-                }}
-              >
-                {item.title}
-              </ThemedText>
-              <View style={styles.type}>
-                <ThemedText textType="mutedSmallText">
-                  {labels[Number(item.type)]}
-                </ThemedText>
-              </View>
+    } catch (e) {
+      console.error("Failed to load goals:", e);
+    }
+  }, [selectedLabel]);
+
+  const renderItem = ({ item }: { item: Goal }) => {
+    const parentGoal = getGoalTitleById(item.parent_id);
+    return (
+      <TouchableOpacity
+        onPress={() =>
+          router.push({
+            pathname: "/goals/[id]",
+            params: { id: item.id },
+          })
+        }
+      >
+        <View key={item.id} style={styles.goalCard}>
+          <View style={styles.dualHorizontal}>
+            <View>
+              <ProgressRing
+                size={85}
+                thickness={4}
+                color={c.accent}
+                progress={Number(item.progress_value / 100)}
+              />
             </View>
-            <ThemedText textType="mutedSmallText" style={styles.smallText}>
-              {item.due_date}
-            </ThemedText>
-            <ThemedText textType="mutedSmallText" style={styles.smallText}>
-              {item.parent_id}
+            <View style={{ flex: 1 }}>
+              <View style={styles.firstHori}>
+                <ThemedText
+                  textType="default"
+                  style={{
+                    fontWeight: "600",
+                    flexWrap: "wrap",
+                    marginRight: 8,
+                    flexShrink: 1,
+                  }}
+                >
+                  {item.title}
+                </ThemedText>
+                <View style={styles.type}>
+                  <ThemedText textType="mutedSmallText">
+                    {labels[Number(item.type)]}
+                  </ThemedText>
+                </View>
+              </View>
+              <ThemedText textType="mutedSmallText" numberOfLines={2}>
+                {item.description}
+              </ThemedText>
+              <ThemedText
+                textType="mutedSmallText"
+                numberOfLines={2}
+                style={{ marginTop: 5, lineHeight: 14 }}
+              >
+                {item.reason}
+              </ThemedText>
+              <ThemedText textType="mutedSmallText" style={styles.smallText}>
+                Due: {getRelativeDate(item.due_date)}
+              </ThemedText>
+              {parentGoal && (
+                <ThemedText textType="mutedSmallText" style={styles.smallText}>
+                  <Ionicons name="arrow-up" size={12} color="gray" />{" "}
+                  {parentGoal}
+                </ThemedText>
+              )}
+            </View>
+          </View>
+          <View>
+            <ThemedText textType="coloredDefault">
+              {item.progress_value}% Complete
             </ThemedText>
           </View>
         </View>
-        <View>
-          <ThemedText textType="coloredDefault">
-            {item.progress_value}% Complete
+      </TouchableOpacity>
+    );
+  };
+
+  // Empty state component
+  const EmptyState = () => (
+    <View style={styles.emptyContainer}>
+      <Ionicons name="flag-outline" size={56} color={c.mutedForeground} />
+      <ThemedText textType="headForeground" style={styles.emptyTitle}>
+        No goals yet
+      </ThemedText>
+      <ThemedText textType="mutedDefault" style={styles.emptySubtitle}>
+        {selectedLabel === 0
+          ? "Tap the + button to create your first goal."
+          : `You have no ${labels[selectedLabel].toLowerCase()} goals yet.`}
+      </ThemedText>
+      {selectedLabel === 0 && (
+        <TouchableOpacity
+          style={[styles.emptyButton, { backgroundColor: c.accent }]}
+          onPress={() => router.push("/add-goals")}
+        >
+          <ThemedText textType="default" style={styles.emptyButtonText}>
+            Create your first goal
           </ThemedText>
-        </View>
-      </View>
-    </TouchableOpacity>
+        </TouchableOpacity>
+      )}
+    </View>
   );
 
   return (
@@ -116,7 +164,7 @@ const Goals = function () {
         backgroundColor: Colors[scheme].background,
       }}
     >
-      <ThemedView style={{ paddingBottom: 120 }}>
+      <ThemedView style={{ flex: 1 }}>
         <View style={styles.header}>
           <ThemedText
             textType="defaultSubHead"
@@ -156,21 +204,26 @@ const Goals = function () {
             </ThemedText>
           </TouchableOpacity>
         </View>
+
         <GoalsFilterBar
           onSelect={(selectedLabel) => {
             setSelectedLabel(selectedLabel);
           }}
         />
+
         <FlatList
           data={goals}
           renderItem={renderItem}
-          keyExtractor={(item) => item.id.toString()} // Unique ID for each item
+          keyExtractor={(item) => item.id.toString()}
           contentContainerStyle={{
             ...styles.goalsList,
             marginBottom: tabHeight,
-          }} // Fixes your tab bar overlap!
+            // flexGrow: 1, // allows ListEmptyComponent to fill height
+          }}
+          ListEmptyComponent={<EmptyState />} // 👈 key addition
         />
       </ThemedView>
+
       <TouchableOpacity
         style={styles.addGoalButton}
         onPress={() => {
@@ -193,7 +246,6 @@ const useStyles = function (scheme: "light" | "dark") {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
-      // alignContent: "center",
       width: "89%",
       alignSelf: "center",
       marginTop: 20,
@@ -212,6 +264,7 @@ const useStyles = function (scheme: "light" | "dark") {
       gap: 15,
       width: "89%",
       alignSelf: "center",
+      paddingBottom: 20,
     },
     goalCard: {
       padding: 10,
@@ -224,23 +277,19 @@ const useStyles = function (scheme: "light" | "dark") {
     dualHorizontal: {
       flexDirection: "row",
       gap: 20,
-      //   paddingRight: 10,
     },
     firstHori: {
       flexDirection: "row",
       justifyContent: "space-between",
-      //   alignSelf: "stretch",
     },
     type: {
       padding: 10,
       backgroundColor: "#2d2d2d",
       borderRadius: 10,
-      //   flex: 1,
     },
     smallText: {
       marginTop: 10,
     },
-
     addGoalButton: {
       justifyContent: "center",
       alignItems: "center",
@@ -251,6 +300,33 @@ const useStyles = function (scheme: "light" | "dark") {
       height: 60,
       width: 60,
       borderRadius: 30,
+    },
+    emptyContainer: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingTop: 60,
+      gap: 12,
+    },
+    emptyTitle: {
+      fontSize: 22,
+      fontWeight: "bold",
+      textAlign: "center",
+    },
+    emptySubtitle: {
+      textAlign: "center",
+      paddingHorizontal: 24,
+    },
+    emptyButton: {
+      marginTop: 8,
+      paddingVertical: 14,
+      paddingHorizontal: 28,
+      borderRadius: 12,
+    },
+    emptyButtonText: {
+      color: "#fff",
+      fontWeight: "600",
+      fontSize: 16,
     },
   });
 };

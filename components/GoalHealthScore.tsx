@@ -3,10 +3,21 @@ import { StyleSheet, useColorScheme, View } from "react-native";
 import { ThemedText } from "./themed-text";
 import ProgressRing from "./UI/ProgressRing";
 
-const GoalHealthScore = function () {
+interface Props {
+  score: number;
+}
+
+const GoalHealthScore = function ({ score }: Props) {
   const scheme = useColorScheme() ?? "light";
   const styles = useStyles(scheme);
   const c = Colors[scheme];
+
+  const getMessage = (score: number) => {
+    if (score >= 80) return "Great progress! Keep up the momentum.";
+    if (score >= 50) return "You're making progress. Stay consistent.";
+    if (score > 0) return "Some goals need attention. Keep pushing.";
+    return "No active goals tracked yet.";
+  };
 
   return (
     <View style={styles.gHS}>
@@ -16,10 +27,12 @@ const GoalHealthScore = function () {
           size={220}
           thickness={5}
           color={c.accent}
-          progress={Number(75 / 100)}
+          progress={score / 100}
         >
           <View>
-            <ThemedText textType="coloredHeadingForeground">72%</ThemedText>
+            <ThemedText textType="coloredHeadingForeground">
+              {score}%
+            </ThemedText>
             <ThemedText textType="mutedDefault"> on track</ThemedText>
           </View>
         </ProgressRing>
@@ -28,7 +41,7 @@ const GoalHealthScore = function () {
           textType="mutedDefault"
           style={{ textAlign: "center", width: "80%" }}
         >
-          Great progress! Keep up the momentum with your active goals.
+          {getMessage(score)}
         </ThemedText>
       </View>
     </View>
@@ -45,7 +58,7 @@ const useStyles = (scheme: "light" | "dark") => {
     },
     streakLIst: {
       flexDirection: "row",
-      gap: "10",
+      gap: 10,
       marginVertical: 10,
     },
     gHSCard: {

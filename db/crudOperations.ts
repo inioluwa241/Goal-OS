@@ -112,6 +112,13 @@ export function getGoalsByType(type: string): Goal[] {
   return results;
 }
 
+export async function hasAnyGoals(): Promise<boolean> {
+  const result = await db.getFirstAsync<{ count: number }>(
+    "SELECT COUNT(*) as count FROM goals",
+  );
+  return (result?.count ?? 0) > 0;
+}
+
 // 1. Define exactly what "some data" looks like
 interface GoalPreview {
   id: string;
@@ -239,8 +246,11 @@ export const markDailyGoalDone = (id: string) => {
 
   // Streak continues if last check-in was yesterday, otherwise reset to 1
   const newStreak =
-    lastDate === yesterday || lastDate === today ? goal.streak + 1 : 1;
-
+    lastDate === today
+      ? goal.streak // already done today, don't increment
+      : lastDate === yesterday
+        ? goal.streak + 1 // continuing the streak
+        : 1;
   db.runSync(
     `UPDATE goals
      SET is_complete = 1,
@@ -256,9 +266,25 @@ export const markDailyGoalDone = (id: string) => {
 };
 
 // DELETE
-// export function deleteUser(id) {
-//   db.runSync('DELETE FROM users WHERE id = ?', [id]);
-// }
+export function clearAllData() {
+  db.withTransactionSync(() => {
+    db.execSync(`
+      DELETE FROM vision_board_images;
+      DELETE FROM progress_logs;
+      DELETE FROM milestones;
+      DELETE FROM goal_reflections;
+      DELETE FROM reminders;
+      DELETE FROM weekly_reviews;
+      DELETE FROM affirmations;
+      DELETE FROM quotes;
+      DELETE FROM notes;
+      DELETE FROM goals;
+    `);
+
+    // Reset all auto-increment counters
+    db.execSync(`DELETE FROM sqlite_sequence`);
+  });
+}
 
 // SAVE REFLECTIONS
 export function addReflection(goalId: string, content: string) {
@@ -302,4 +328,173 @@ export function addNote(note: newNote) {
 
 export function getNotes() {
   return db.getAllSync("SELECT * FROM notes");
+}
+
+// ── Vision Board Images ────────────────────────────────────────────────────────
+export interface VisionImage {
+  id: string;
+  local_uri: string;
+  label: string | null;
+  position: number;
+}
+
+export function getVisionImages(): VisionImage[] {
+  return db.getAllSync<VisionImage>(
+    "SELECT id, local_uri, label, position FROM vision_board_images ORDER BY position ASC",
+  );
+}
+
+export function addVisionImage(uri: string, label?: string): void {
+  const id = Crypto.randomUUID();
+  const userId = getSetting("user_id");
+  const position = getVisionImages().length;
+
+  db.runSync(
+    "INSERT INTO vision_board_images (id, user_id, local_uri, label, position) VALUES (?, ?, ?, ?, ?)",
+    [id, userId, uri, label ?? null, position],
+  );
+}
+
+export function deleteVisionImage(id: string): void {
+  db.runSync("DELETE FROM vision_board_images WHERE id = ?", [id]);
+}
+
+// ── Reminders ────────────────────────────────────────────────────────────────
+
+interface NewReminder {
+  title: string;
+  hour: number;
+  minute: number;
+  time: string;
+  notifIds: string[];
+}
+
+export function addReminder(reminder: NewReminder): string {
+  const id = Crypto.randomUUID();
+  const userId = getSetting("user_id");
+
+  db.runSync(
+    "INSERT INTO reminders (id, user_id, title, due_time, status) VALUES (?, ?, ?, ?, ?)",
+    [id, userId, reminder.title, reminder.time, "upcoming"],
+  );
+
+  // store notifIds and hour/minute in app_settings keyed by reminder id
+  db.runSync("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)", [
+    `reminder_meta_${id}`,
+    JSON.stringify({
+      hour: reminder.hour,
+      minute: reminder.minute,
+      notifIds: reminder.notifIds,
+    }),
+  ]);
+
+  console.log("Inserted reminder:", id);
+  return id;
+}
+
+export function getReminders() {
+  const rows = db.getAllSync<{
+    id: string;
+    title: string;
+    due_time: string;
+    status: string;
+  }>(
+    "SELECT id, title, due_time, status FROM reminders ORDER BY created_at DESC",
+  );
+
+  return rows.map((r) => {
+    const meta = getSetting(`reminder_meta_${r.id}`);
+    const {
+      hour = 0,
+      minute = 0,
+      notifIds = [],
+    } = meta ? JSON.parse(meta) : {};
+    return {
+      id: r.id,
+      title: r.title,
+      time: r.due_time,
+      hour,
+      minute,
+      status: r.status as "upcoming" | "completed" | "missed",
+      goal: "Linked goal",
+      notifIds,
+    };
+  });
+}
+
+export function updateReminderStatus(
+  id: string,
+  status: "upcoming" | "completed" | "missed",
+) {
+  db.runSync(
+    "UPDATE reminders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [status, id],
+  );
+}
+
+export function deleteReminder(id: string) {
+  db.runSync("DELETE FROM reminders WHERE id = ?", [id]);
+  db.runSync("DELETE FROM app_settings WHERE key = ?", [`reminder_meta_${id}`]);
+}
+
+// Recalculates and resets streaks for goals not checked in yesterday
+export function recalculateStreaks(): void {
+  const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+
+  // Any daily goal whose last_checked_in is older than yesterday gets streak reset
+  db.runSync(
+    `UPDATE goals
+     SET streak = 0
+     WHERE type = 1
+       AND status != 'completed'
+       AND (last_checked_in IS NULL OR DATE(last_checked_in) < ?)`,
+    [yesterday],
+  );
+}
+
+// Weighted health score across all active goals
+export function computeHealthScore(): number {
+  const goals = db.getAllSync<{
+    type: number;
+    progress_value: number;
+    created_at: string;
+    due_date: string | null;
+  }>(
+    `SELECT type, progress_value, created_at, due_date
+     FROM goals
+     WHERE status = 'active' AND is_complete = 0`,
+  );
+
+  if (goals.length === 0) return 0;
+
+  const weights: Record<number, number> = { 4: 4, 3: 3, 2: 2, 1: 1 };
+  // type 4 = yearly, 3 = monthly, 2 = weekly, 1 = daily
+
+  let weightedSum = 0;
+  let totalWeight = 0;
+
+  const today = Date.now();
+
+  for (const goal of goals) {
+    const w = weights[goal.type] ?? 1;
+    let contribution = goal.progress_value; // 0–100
+
+    // On-track penalty: if more time has passed than progress suggests, penalise
+    if (goal.due_date) {
+      const start = new Date(goal.created_at).getTime();
+      const end = new Date(goal.due_date).getTime();
+      const elapsed = (today - start) / (end - start); // 0.0 → 1.0
+      const expectedProgress = Math.min(elapsed * 100, 100);
+
+      if (contribution < expectedProgress) {
+        // Behind schedule — apply a 0.5 penalty factor
+        contribution = contribution * 0.5;
+      }
+    }
+
+    weightedSum += contribution * w;
+    totalWeight += w;
+  }
+
+  return Math.round(weightedSum / totalWeight);
 }

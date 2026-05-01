@@ -3,6 +3,7 @@ import { Colors } from "@/constants/theme";
 import { getGoalTitleById, getSetting } from "@/db/crudOperations";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { router } from "expo-router";
+import { useEffect, useState } from "react";
 import {
   StyleSheet,
   Text,
@@ -26,24 +27,32 @@ const MorningBrief = function ({
   pageRendering: string;
   selectedGoals: Goals[];
 }) {
+  // ── ALL hooks at the top, no exceptions ───────────────────────────────────
   const scheme = useColorScheme() ?? "light";
   const styles = useStyles(scheme);
+  const [goalsToMap, setGoalsToMap] = useState<{ id: string; title: string }[]>(
+    [],
+  );
 
-  const mTimeSetting = getSetting("morning_brief_time");
-  const savedGoalString = getSetting("morning_brief_goals");
+  useEffect(() => {
+    try {
+      const savedGoalString = getSetting("morning_brief_goals");
+      const mGoalSetting = savedGoalString ? JSON.parse(savedGoalString) : [];
 
-  const mGoalSetting = savedGoalString ? JSON.parse(savedGoalString) : [];
+      const resolved = mGoalSetting.map((id: string) => ({
+        id,
+        title: getGoalTitleById(id) ?? "",
+      }));
 
-  console.log(mTimeSetting, mGoalSetting);
+      // Use saved goals if available, otherwise fall back to selectedGoals prop
+      setGoalsToMap(resolved.length > 0 ? resolved : selectedGoals);
+    } catch (e) {
+      console.error("MorningBrief load error:", e);
+      setGoalsToMap(selectedGoals);
+    }
+  }, [selectedGoals]);
 
-  const goals = mGoalSetting.map((each: string) => ({
-    id: each,
-    title: getGoalTitleById(each),
-  })) as { id: number; title: string }[];
-  console.log(goals);
-
-  const goalsToMap = selectedGoals ? selectedGoals : goals;
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <TouchableOpacity
       style={styles.card}
@@ -75,7 +84,7 @@ const MorningBrief = function ({
         >
           YOUR FOCUS
         </ThemedText>
-        {goalsToMap?.map((each, index) => (
+        {goalsToMap.map((each, index) => (
           <View key={each.id} style={styles.brief}>
             <View style={styles.indexContainer}>
               <Text style={styles.index}>{index + 1}</Text>

@@ -1,5 +1,7 @@
+import { scheduleReminder } from "@/constants/notifications";
 import { Colors } from "@/constants/theme";
-import { addGoal, titleExists } from "@/db/crudOperations";
+import { addGoal, getSetting, titleExists } from "@/db/crudOperations";
+import { syncLocalDataToSupabase } from "@/services/sync";
 import { addDays, format } from "date-fns";
 import { router, Stack } from "expo-router";
 import { useEffect, useState } from "react";
@@ -94,14 +96,36 @@ const AddGoal = function () {
               style={[{ opacity: !canSubmit ? 0.5 : 1 }, styles.saveButton]}
               disabled={!canSubmit}
               activeOpacity={!canSubmit ? 1 : 0.1}
-              onPress={() => {
+              onPress={async () => {
                 if (titleExists(newGoalData.title)) {
-                  // alert("A goal with this title already exists!");
                   setError("This goal already exists. Try a unique name!");
-                  return; // Stop here! Don't run the insert.
+                  return;
                 }
-                console.log(newGoalData);
+
                 addGoal(newGoalData);
+
+                // Schedule goal-linked wallpaper reminder if enabled
+                if (reminder && Platform.OS === "android") {
+                  await scheduleReminder(
+                    goalTitle,
+                    9, // default 9am — or wire up a time picker later
+                    0,
+                    {
+                      title: goalTitle,
+                      progress: 0,
+                      deadline: selectedDate || "No deadline",
+                      quote:
+                        goalReason ||
+                        "You have the power to make today extraordinary.",
+                    },
+                  );
+                }
+
+                const userId = getSetting("user_id");
+                if (userId && userId !== "null") {
+                  syncLocalDataToSupabase(userId).catch(console.error);
+                }
+
                 router.push("/(tabs)/goals");
               }}
             >

@@ -1,10 +1,27 @@
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import {
+  cancelReminderNotifications,
+  requestNotificationPermissions,
+  scheduleReminder,
+} from "@/constants/notifications";
 import { Colors } from "@/constants/theme";
+import {
+  addReminder,
+  deleteReminder,
+  getReminders,
+  getSetting,
+  updateReminderStatus,
+} from "@/db/crudOperations";
+import { syncLocalDataToSupabase } from "@/services/sync";
 import { Ionicons } from "@expo/vector-icons";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
-import { useState } from "react";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import * as Notifications from "expo-notifications";
+import { useFocusEffect } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Alert,
   FlatList,
   ScrollView,
   StyleSheet,
@@ -18,51 +35,29 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Reminder {
-  id: number;
+  id: string;
   title: string;
   time: string;
+  hour: number;
+  minute: number;
   status: "upcoming" | "completed" | "missed";
   goal: string;
+  notifIds: string[];
 }
 
-// ── Mock data ──────────────────────────────────────────────────────────────────
-const mockReminders: Reminder[] = [
-  {
-    id: 1,
-    title: "Complete project proposal",
-    time: "09:00 AM",
-    status: "upcoming",
-    goal: "Complete project proposal",
-  },
-  {
-    id: 2,
-    title: "Morning meditation",
-    time: "07:30 AM",
-    status: "completed",
-    goal: "Health & wellness",
-  },
-  {
-    id: 3,
-    title: "Review weekly goals",
-    time: "06:00 PM",
-    status: "upcoming",
-    goal: "Goal review",
-  },
-  {
-    id: 4,
-    title: "Write 3 blog posts",
-    time: "10:00 AM",
-    status: "missed",
-    goal: "Write 3 blog posts",
-  },
-  {
-    id: 5,
-    title: "Exercise routine",
-    time: "05:30 PM",
-    status: "upcoming",
-    goal: "Exercise 5 times",
-  },
-];
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function timeToISO(date: Date): string {
+  const d = new Date();
+  d.setHours(date.getHours(), date.getMinutes(), 0, 0);
+  return d.toISOString();
+}
 
 // ── Main component ─────────────────────────────────────────────────────────────
 const Reminders = function () {
@@ -71,39 +66,123 @@ const Reminders = function () {
   const c = Colors[scheme];
   const styles = useStyles(scheme, tabHeight);
 
-  const [reminders, setReminders] = useState<Reminder[]>(mockReminders);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newTitle, setNewTitle] = useState("");
-  const [newTime, setNewTime] = useState("09:00 AM");
+  const [newTime, setNewTime] = useState(new Date());
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [titleFocused, setTitleFocused] = useState(false);
-  const [timeFocused, setTimeFocused] = useState(false);
+
+  const notifListener = useRef<Notifications.EventSubscription | null>(null);
+  const responseListener = useRef<Notifications.EventSubscription | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const titleInputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    requestNotificationPermissions().then((granted) => {
+      if (!granted) {
+        Alert.alert(
+          "Notifications disabled",
+          "Enable notifications in Settings so Goal OS can remind you.",
+        );
+      }
+    });
+
+    notifListener.current = Notifications.addNotificationReceivedListener(
+      (notification) => {
+        console.log("Notification received:", notification);
+      },
+    );
+
+    responseListener.current =
+      Notifications.addNotificationResponseReceivedListener((response) => {
+        console.log("Notification tapped:", response);
+      });
+
+    return () => {
+      notifListener.current?.remove();
+      responseListener.current?.remove();
+    };
+  }, []);
+
+  // ── Load from DB on focus ────────────────────────────────────────────────────
+  useFocusEffect(
+    useCallback(() => {
+      try {
+        const loaded = getReminders();
+        setReminders(loaded);
+      } catch (e) {
+        console.error("Failed to load reminders:", e);
+      }
+    }, []),
+  );
 
   const upcomingReminders = reminders.filter((r) => r.status === "upcoming");
   const completedReminders = reminders.filter((r) => r.status === "completed");
   const missedReminders = reminders.filter((r) => r.status === "missed");
 
-  const handleAddReminder = () => {
+  // ── Add reminder ─────────────────────────────────────────────────────────────
+  const handleAddReminder = async () => {
     if (!newTitle.trim()) return;
-    const newReminder: Reminder = {
-      id: reminders.length + 1,
-      title: newTitle,
-      time: newTime,
-      status: "upcoming",
-      goal: "Linked goal",
-    };
-    setReminders([newReminder, ...reminders]);
+
+    const hour = newTime.getHours();
+    const minute = newTime.getMinutes();
+    const displayTime = formatTime(newTime);
+    const isoTime = timeToISO(newTime);
+
+    const notifIds = await scheduleReminder(newTitle.trim(), hour, minute);
+
+    const id = addReminder({
+      title: newTitle.trim(),
+      time: isoTime, // ISO string stored in DB for Supabase sync
+      hour,
+      minute,
+      notifIds,
+    });
+
+    const userId = getSetting("user_id");
+    if (userId && userId !== "null") {
+      syncLocalDataToSupabase(userId).catch(console.error);
+    }
+
+    setReminders((prev) => [
+      {
+        id,
+        title: newTitle.trim(),
+        time: displayTime, // display string used in UI
+        hour,
+        minute,
+        status: "upcoming",
+        goal: "Linked goal",
+        notifIds,
+      },
+      ...prev,
+    ]);
+
     setNewTitle("");
-    setNewTime("09:00 AM");
+    setNewTime(new Date());
     setShowCreateForm(false);
   };
 
-  const handleComplete = (id: number) => {
+  // ── Complete reminder ────────────────────────────────────────────────────────
+  const handleComplete = async (id: string) => {
+    const reminder = reminders.find((r) => r.id === id);
+    if (reminder?.notifIds.length) {
+      await cancelReminderNotifications(reminder.notifIds);
+    }
+    updateReminderStatus(id, "completed");
     setReminders((prev) =>
       prev.map((r) => (r.id === id ? { ...r, status: "completed" } : r)),
     );
   };
 
-  const handleDelete = (id: number) => {
+  // ── Delete reminder ──────────────────────────────────────────────────────────
+  const handleDelete = async (id: string) => {
+    const reminder = reminders.find((r) => r.id === id);
+    if (reminder?.notifIds.length) {
+      await cancelReminderNotifications(reminder.notifIds);
+    }
+    deleteReminder(id);
     setReminders((prev) => prev.filter((r) => r.id !== id));
   };
 
@@ -111,6 +190,14 @@ const Reminders = function () {
   const ReminderCard = ({ item }: { item: Reminder }) => {
     const isCompleted = item.status === "completed";
     const isMissed = item.status === "missed";
+
+    // Display time: if ISO string, format it; otherwise show as-is
+    const displayTime = (() => {
+      if (item.time?.includes("T")) {
+        return formatTime(new Date(item.time));
+      }
+      return item.time;
+    })();
 
     return (
       <View
@@ -153,14 +240,13 @@ const Reminders = function () {
             >
               {item.title}
             </Text>
-            <Text style={styles.cardTime}>{item.time}</Text>
+            <Text style={styles.cardTime}>{displayTime}</Text>
             {!isCompleted && (
               <Text style={styles.cardGoal}>Goal: {item.goal}</Text>
             )}
           </View>
         </View>
 
-        {/* Action button */}
         {item.status === "upcoming" && (
           <TouchableOpacity
             style={styles.markDoneButton}
@@ -185,150 +271,189 @@ const Reminders = function () {
     );
   };
 
-  // ── Section renderer for FlatList ────────────────────────────────────────────
-  const sections = [
-    { key: "form" },
-    { key: "upcoming", data: upcomingReminders },
-    { key: "completed", data: completedReminders },
-    { key: "missed", data: missedReminders },
-  ];
-
   const renderItem = ({ item }: { item: Reminder }) => (
     <ReminderCard item={item} />
   );
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: c.background }}>
-      <ScrollView>
-        <ThemedView style={{ flex: 1 }}>
-          {/* Header */}
-          <View style={styles.header}>
-            <ThemedText textType="defaultSubHead" style={styles.headerTitle}>
-              Reminders
-            </ThemedText>
-          </View>
-
-          {/* Create form */}
-          {showCreateForm && (
-            <View style={styles.createForm}>
-              <ThemedText textType="default" style={styles.formTitle}>
-                New Reminder
+    <View style={{ flex: 1, backgroundColor: c.background }}>
+      <SafeAreaView style={{ flex: 1 }}>
+        <ScrollView ref={scrollRef}>
+          <ThemedView style={{ flex: 1 }}>
+            {/* Header */}
+            <View style={styles.header}>
+              <ThemedText textType="defaultSubHead" style={styles.headerTitle}>
+                Reminders
               </ThemedText>
-              <View style={styles.fieldGroup}>
-                <ThemedText textType="default" style={styles.label}>
-                  Title
-                </ThemedText>
-                <TextInput
-                  style={[styles.input, titleFocused && styles.inputFocused]}
-                  placeholder="E.g. Exercise session"
-                  placeholderTextColor={c.muted}
-                  value={newTitle}
-                  onChangeText={setNewTitle}
-                  onFocus={() => setTitleFocused(true)}
-                  onBlur={() => setTitleFocused(false)}
-                />
-              </View>
-              <View style={styles.fieldGroup}>
-                <ThemedText textType="default" style={styles.label}>
-                  Time
-                </ThemedText>
-                <TextInput
-                  style={[styles.input, timeFocused && styles.inputFocused]}
-                  placeholder="09:00 AM"
-                  placeholderTextColor={c.muted}
-                  value={newTime}
-                  onChangeText={setNewTime}
-                  onFocus={() => setTimeFocused(true)}
-                  onBlur={() => setTimeFocused(false)}
-                />
-              </View>
-              <View style={styles.formButtons}>
-                <TouchableOpacity
-                  style={styles.createButton}
-                  onPress={handleAddReminder}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.createButtonText}>Create</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.cancelButton}
-                  onPress={() => setShowCreateForm(false)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-              </View>
             </View>
-          )}
 
-          {/* Upcoming */}
-          {upcomingReminders.length > 0 && (
-            <>
-              <ThemedText textType="mutedDefault" style={styles.sectionLabel}>
-                UPCOMING
-              </ThemedText>
-              <FlatList
-                data={upcomingReminders}
-                renderItem={renderItem}
-                keyExtractor={(item) => item.id.toString()}
-                scrollEnabled={false}
-                contentContainerStyle={styles.sectionList}
-              />
-            </>
-          )}
+            {/* Create form */}
+            {showCreateForm && (
+              <View style={styles.createForm}>
+                <ThemedText textType="default" style={styles.formTitle}>
+                  New Reminder
+                </ThemedText>
 
-          {/* Completed */}
-          {completedReminders.length > 0 && (
-            <>
-              <ThemedText textType="mutedDefault" style={styles.sectionLabel}>
-                COMPLETED
-              </ThemedText>
-              <FlatList
-                data={completedReminders}
-                renderItem={renderItem}
-                keyExtractor={(item) => item.id.toString()}
-                scrollEnabled={false}
-                contentContainerStyle={styles.sectionList}
-              />
-            </>
-          )}
+                {/* Title field */}
+                <View style={styles.fieldGroup}>
+                  <ThemedText textType="default" style={styles.label}>
+                    Title
+                  </ThemedText>
+                  <TextInput
+                    style={[styles.input, titleFocused && styles.inputFocused]}
+                    placeholder="E.g. Exercise session"
+                    placeholderTextColor={c.muted}
+                    value={newTitle}
+                    ref={titleInputRef}
+                    onChangeText={setNewTitle}
+                    onFocus={() => setTitleFocused(true)}
+                    onBlur={() => setTitleFocused(false)}
+                  />
+                </View>
 
-          {/* Missed */}
-          {missedReminders.length > 0 && (
-            <>
-              <ThemedText textType="mutedDefault" style={styles.sectionLabel}>
-                MISSED
-              </ThemedText>
-              <FlatList
-                data={missedReminders}
-                renderItem={renderItem}
-                keyExtractor={(item) => item.id.toString()}
-                scrollEnabled={false}
-                contentContainerStyle={styles.sectionList}
-              />
-            </>
-          )}
+                {/* Time field — native picker */}
+                <View style={styles.fieldGroup}>
+                  <ThemedText textType="default" style={styles.label}>
+                    Time
+                  </ThemedText>
+                  <TouchableOpacity
+                    style={styles.timeButton}
+                    onPress={() => setShowTimePicker(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name="time-outline"
+                      size={16}
+                      color={c.mutedForeground}
+                    />
+                    <Text style={styles.timeButtonText}>
+                      {formatTime(newTime)}
+                    </Text>
+                  </TouchableOpacity>
 
-          {/* Empty state */}
-          {reminders.length === 0 && (
-            <View style={styles.emptyState}>
-              <Ionicons name="time-outline" size={48} color={c.muted} />
-              <Text style={styles.emptyText}>No reminders yet</Text>
-              <Text style={styles.emptySubText}>Create one to get started</Text>
-            </View>
-          )}
+                  {showTimePicker && (
+                    <DateTimePicker
+                      value={newTime}
+                      mode="time"
+                      is24Hour={false}
+                      onChange={(event, selected) => {
+                        setShowTimePicker(false);
+                        if (selected) setNewTime(selected);
+                      }}
+                    />
+                  )}
+                </View>
 
-          {/* FAB */}
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => setShowCreateForm(true)}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="add" size={40} color={c.background} />
-          </TouchableOpacity>
-        </ThemedView>
-      </ScrollView>
-    </SafeAreaView>
+                {/* Buttons */}
+                <View style={styles.formButtons}>
+                  <TouchableOpacity
+                    style={styles.createButton}
+                    onPress={handleAddReminder}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.createButtonText}>Create</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.cancelButton}
+                    onPress={() => setShowCreateForm(false)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* Upcoming */}
+            {upcomingReminders.length > 0 && (
+              <>
+                <ThemedText textType="mutedDefault" style={styles.sectionLabel}>
+                  UPCOMING
+                </ThemedText>
+                <FlatList
+                  data={upcomingReminders}
+                  renderItem={renderItem}
+                  keyExtractor={(item) => item.id}
+                  scrollEnabled={false}
+                  contentContainerStyle={styles.sectionList}
+                />
+              </>
+            )}
+
+            {/* Completed */}
+            {completedReminders.length > 0 && (
+              <>
+                <ThemedText textType="mutedDefault" style={styles.sectionLabel}>
+                  COMPLETED
+                </ThemedText>
+                <FlatList
+                  data={completedReminders}
+                  renderItem={renderItem}
+                  keyExtractor={(item) => item.id}
+                  scrollEnabled={false}
+                  contentContainerStyle={styles.sectionList}
+                />
+              </>
+            )}
+
+            {/* Missed */}
+            {missedReminders.length > 0 && (
+              <>
+                <ThemedText textType="mutedDefault" style={styles.sectionLabel}>
+                  MISSED
+                </ThemedText>
+                <FlatList
+                  data={missedReminders}
+                  renderItem={renderItem}
+                  keyExtractor={(item) => item.id}
+                  scrollEnabled={false}
+                  contentContainerStyle={styles.sectionList}
+                />
+              </>
+            )}
+
+            {/* Empty state */}
+            {reminders.length === 0 && !showCreateForm && (
+              <View style={styles.emptyState}>
+                <Ionicons
+                  name="time-outline"
+                  size={56}
+                  color={c.mutedForeground}
+                />
+                <ThemedText textType="headForeground" style={styles.emptyTitle}>
+                  No reminders yet
+                </ThemedText>
+                <ThemedText
+                  textType="mutedDefault"
+                  style={styles.emptySubtitle}
+                >
+                  Tap the + button to create your first reminder.
+                </ThemedText>
+                <TouchableOpacity
+                  style={[styles.emptyButton, { backgroundColor: c.accent }]}
+                  onPress={() => setShowCreateForm(true)}
+                >
+                  <Text style={styles.emptyButtonText}>Create a reminder</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </ThemedView>
+        </ScrollView>
+      </SafeAreaView>
+
+      {/* FAB */}
+      <TouchableOpacity
+        style={styles.addButton}
+        onPress={() => {
+          setShowCreateForm(true);
+          scrollRef.current?.scrollTo({ y: 0, animated: true });
+          setTimeout(() => titleInputRef.current?.focus(), 300);
+        }}
+        activeOpacity={0.8}
+      >
+        <Ionicons name="add" size={40} color={c.background} />
+      </TouchableOpacity>
+    </View>
   );
 };
 
@@ -339,17 +464,12 @@ const useStyles = function (scheme: "light" | "dark", tabHeight: number) {
   const c = Colors[scheme];
 
   return StyleSheet.create({
-    // Header
     header: {
       marginTop: 20,
       marginHorizontal: 20,
       marginBottom: 20,
     },
-    headerTitle: {
-      // styled via textType
-    },
-
-    // Section labels
+    headerTitle: {},
     sectionLabel: {
       fontSize: 11,
       fontWeight: "700",
@@ -364,8 +484,6 @@ const useStyles = function (scheme: "light" | "dark", tabHeight: number) {
       alignSelf: "center",
       paddingBottom: 10,
     },
-
-    // Reminder card
     card: {
       flexDirection: "row",
       alignItems: "center",
@@ -383,36 +501,17 @@ const useStyles = function (scheme: "light" | "dark", tabHeight: number) {
       gap: 10,
       flex: 1,
     },
-    cardText: {
-      flex: 1,
-      gap: 3,
-    },
-    cardTitle: {
-      fontSize: 14,
-      fontWeight: "600",
-      color: c.foreground,
-    },
-    cardTime: {
-      fontSize: 12,
-      color: c.mutedForeground,
-    },
-    cardGoal: {
-      fontSize: 12,
-      color: c.mutedForeground,
-    },
-
-    // Action buttons on cards
+    cardText: { flex: 1, gap: 3 },
+    cardTitle: { fontSize: 14, fontWeight: "600", color: c.foreground },
+    cardTime: { fontSize: 12, color: c.mutedForeground },
+    cardGoal: { fontSize: 12, color: c.mutedForeground },
     markDoneButton: {
       paddingVertical: 6,
       paddingHorizontal: 12,
       backgroundColor: c.accent,
       borderRadius: 8,
     },
-    markDoneText: {
-      fontSize: 12,
-      fontWeight: "600",
-      color: "#fff",
-    },
+    markDoneText: { fontSize: 12, fontWeight: "600", color: "#fff" },
     deleteButton: {
       paddingVertical: 6,
       paddingHorizontal: 12,
@@ -421,13 +520,7 @@ const useStyles = function (scheme: "light" | "dark", tabHeight: number) {
       borderColor: "rgba(239,68,68,0.3)",
       borderRadius: 8,
     },
-    deleteText: {
-      fontSize: 12,
-      fontWeight: "600",
-      color: "#f87171",
-    },
-
-    // Create form
+    deleteText: { fontSize: 12, fontWeight: "600", color: "#f87171" },
     createForm: {
       width: "89%",
       alignSelf: "center",
@@ -439,17 +532,9 @@ const useStyles = function (scheme: "light" | "dark", tabHeight: number) {
       gap: 14,
       marginBottom: 20,
     },
-    formTitle: {
-      fontWeight: "700",
-      fontSize: 16,
-    },
-    fieldGroup: {
-      gap: 8,
-    },
-    label: {
-      fontSize: 13,
-      fontWeight: "600",
-    },
+    formTitle: { fontWeight: "700", fontSize: 16 },
+    fieldGroup: { gap: 8 },
+    label: { fontSize: 13, fontWeight: "600" },
     input: {
       height: 44,
       borderWidth: 1,
@@ -460,14 +545,23 @@ const useStyles = function (scheme: "light" | "dark", tabHeight: number) {
       fontSize: 14,
       color: c.foreground,
     },
-    inputFocused: {
-      borderWidth: 2,
-      borderColor: c.accent,
-    },
-    formButtons: {
+    inputFocused: { borderWidth: 2, borderColor: c.accent },
+    timeButton: {
+      height: 44,
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 10,
+      backgroundColor: c.background,
+      paddingHorizontal: 14,
       flexDirection: "row",
-      gap: 10,
+      alignItems: "center",
+      gap: 8,
     },
+    timeButtonText: {
+      fontSize: 14,
+      color: c.foreground,
+    },
+    formButtons: { flexDirection: "row", gap: 10 },
     createButton: {
       flex: 1,
       paddingVertical: 10,
@@ -475,11 +569,7 @@ const useStyles = function (scheme: "light" | "dark", tabHeight: number) {
       borderRadius: 10,
       alignItems: "center",
     },
-    createButtonText: {
-      color: "#fff",
-      fontWeight: "600",
-      fontSize: 14,
-    },
+    createButtonText: { color: "#fff", fontWeight: "600", fontSize: 14 },
     cancelButton: {
       flex: 1,
       paddingVertical: 10,
@@ -489,41 +579,46 @@ const useStyles = function (scheme: "light" | "dark", tabHeight: number) {
       borderRadius: 10,
       alignItems: "center",
     },
-    cancelButtonText: {
-      color: c.foreground,
-      fontWeight: "600",
-      fontSize: 14,
-    },
-
-    // Empty state
+    cancelButtonText: { color: c.foreground, fontWeight: "600", fontSize: 14 },
     emptyState: {
-      flex: 1,
       alignItems: "center",
       justifyContent: "center",
-      gap: 8,
+      marginTop: 80,
+      gap: 12,
+      paddingHorizontal: 24,
     },
-    emptyText: {
-      fontSize: 14,
-      color: c.mutedForeground,
+    emptyTitle: {
+      fontSize: 22,
+      fontWeight: "bold",
+      textAlign: "center",
     },
-    emptySubText: {
-      fontSize: 12,
-      color: c.mutedForeground,
+    emptySubtitle: {
+      textAlign: "center",
     },
-
-    // FAB
+    emptyButton: {
+      marginTop: 8,
+      paddingVertical: 14,
+      paddingHorizontal: 28,
+      borderRadius: 12,
+    },
+    emptyButtonText: {
+      color: "#fff",
+      fontWeight: "600",
+      fontSize: 16,
+    },
     addButton: {
       justifyContent: "center",
       alignItems: "center",
       position: "absolute",
       right: 20,
-      bottom: tabHeight + 20,
+      bottom: 20,
       backgroundColor: c.accent,
       height: 60,
       width: 60,
       borderRadius: 30,
       elevation: 5,
       shadowOpacity: 0.3,
+      zIndex: 999,
     },
   });
 };

@@ -1,5 +1,14 @@
+// VisionImagesDisplay.tsx
 import { Colors } from "@/constants/theme";
+import {
+  addVisionImage,
+  deleteVisionImage,
+  getVisionImages,
+  VisionImage,
+} from "@/db/crudOperations";
 import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
+import { useEffect, useState } from "react";
 import {
   Dimensions,
   Image,
@@ -8,10 +17,7 @@ import {
   View,
 } from "react-native";
 
-import * as ImagePicker from "expo-image-picker";
-import { useState } from "react";
-
-const images: Record<string, any> = {
+const bundledImages: Record<string, any> = {
   one: require("@/assets/images/vision-images/Incomparable.png"),
   two: require("@/assets/images/vision-images/Rectangle 397.png"),
   three: require("@/assets/images/vision-images/Save me.png"),
@@ -21,36 +27,39 @@ const images: Record<string, any> = {
   seven: require("@/assets/images/vision-images/Worthy.png"),
 };
 
-// // Then use it dynamically
-// <Image source={images[imageName]} />
+type Props = {
+  onImageSelect: (uri: string) => void;
+  selectedUri: string | null;
+};
 
-// const images = [
-//   "Incomparable",
-//   "Rectangle 397",
-//   "Save me",
-//   "Swallows",
-//   "The Church",
-//   "Utopia",
-//   "Worthy",
-// ];
-
-const VisionImagesDisplay = function () {
+const VisionImagesDisplay = function ({ onImageSelect, selectedUri }: Props) {
   const scheme = useColorScheme() ?? "light";
   const c = Colors[scheme];
-
-  const [image, setImage] = useState<string | null>(null);
   const imageSize = Dimensions.get("window").width / 3.5 - 10;
+
+  const [userImages, setUserImages] = useState<VisionImage[]>([]);
+
+  useEffect(() => {
+    setUserImages(getVisionImages());
+  }, []);
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images, // images only
-      allowsEditing: true, // lets user crop
-      quality: 1, // full quality
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 1,
     });
 
     if (!result.canceled) {
-      setImage(result.assets[0].uri); // ✅ save the image uri
+      const uri = result.assets[0].uri;
+      addVisionImage(uri);
+      setUserImages(getVisionImages());
     }
+  };
+
+  const handleDelete = (id: string) => {
+    deleteVisionImage(id);
+    setUserImages(getVisionImages());
   };
 
   return (
@@ -65,18 +74,48 @@ const VisionImagesDisplay = function () {
         justifyContent: "space-between",
       }}
     >
-      {/* {Object.keys} */}
-      {Object.keys(images).map((image) => (
+      {/* Bundled images */}
+      {Object.keys(bundledImages).map((key) => (
         <TouchableOpacity
-          key={image}
-          style={{ width: imageSize, height: imageSize }}
+          key={key}
+          onPress={() => onImageSelect(key)}
+          style={{
+            width: imageSize,
+            height: imageSize,
+            borderWidth: selectedUri === key ? 2 : 0,
+            borderColor: "#fff",
+            borderRadius: 8,
+          }}
         >
           <Image
-            source={images[image]}
+            source={bundledImages[key]}
             style={{ width: "100%", height: "100%", borderRadius: 8 }}
           />
         </TouchableOpacity>
       ))}
+
+      {/* User picked images */}
+      {userImages.map((img) => (
+        <TouchableOpacity
+          key={img.id}
+          onPress={() => onImageSelect(img.local_uri)}
+          onLongPress={() => handleDelete(img.id)}
+          style={{
+            width: imageSize,
+            height: imageSize,
+            borderWidth: selectedUri === img.local_uri ? 2 : 0,
+            borderColor: "#fff",
+            borderRadius: 8,
+          }}
+        >
+          <Image
+            source={{ uri: img.local_uri }}
+            style={{ width: "100%", height: "100%", borderRadius: 8 }}
+          />
+        </TouchableOpacity>
+      ))}
+
+      {/* Add button */}
       <TouchableOpacity
         style={{
           width: imageSize,
@@ -92,10 +131,6 @@ const VisionImagesDisplay = function () {
       >
         <Ionicons name="add" size={40} color={c.mutedForeground} />
       </TouchableOpacity>
-
-      {/* {image && (
-        <Image source={{ uri: image }} style={{ width: 200, height: 200 }} />
-      )} */}
     </View>
   );
 };

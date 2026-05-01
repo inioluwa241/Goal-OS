@@ -4,10 +4,11 @@ import { ThemedView } from "@/components/themed-view";
 import NoteCard from "@/components/UI/note-card";
 import { Colors } from "@/constants/theme";
 import { getNotes } from "@/db/crudOperations";
+import { pullFromSupabase } from "@/services/sync";
 import { Ionicons } from "@expo/vector-icons";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
-import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import {
   FlatList,
   StyleSheet,
@@ -24,7 +25,6 @@ interface Note {
   content: string;
   category: "Mindset" | "Gratitude" | "Lessons" | "Ideas";
   createdDate: string;
-  // isPinned: boolean;
 }
 
 const Notes = function () {
@@ -38,26 +38,36 @@ const Notes = function () {
   const [category, setCateory] = useState("All");
   const [notes, setNotes] = useState<Note[]>([]);
 
-  const allNotes = getNotes() as Note[];
+  useFocusEffect(
+    useCallback(() => {
+      try {
+        const allNotes = getNotes() as Note[];
+        console.log(allNotes, "from notes");
+        pullFromSupabase("394f7b91-3933-4eaf-8883-91b383eb00d8");
+        const reversed = [...allNotes].reverse();
 
-  useEffect(() => {
-    setNotes([...allNotes].reverse());
+        if (category !== "All") {
+          setNotes(
+            allNotes.filter(
+              (each) => each.category.toLowerCase() === category.toLowerCase(),
+            ),
+          );
+        } else {
+          setNotes(reversed);
+        }
+      } catch (e) {
+        console.error("Failed to load notes:", e);
+      }
+    }, [category]),
+  );
 
-    if (category !== "All") {
-      setNotes(
-        allNotes.filter(
-          (each) => each.category.toLowerCase() === category.toLowerCase(),
-        ),
-      );
-    }
-  }, [allNotes, category]);
-
-  // your notes filtered in real time
   const filteredNotes = notes.filter(
     (note) =>
       note.content.toLowerCase().includes(query.toLowerCase()) ||
       note.title.toLowerCase().includes(query.toLowerCase()),
   );
+
+  const displayedNotes = !query ? notes : filteredNotes;
 
   const renderItem = ({ item }: { item: Note }) => (
     <TouchableOpacity
@@ -77,6 +87,67 @@ const Notes = function () {
     </TouchableOpacity>
   );
 
+  const EmptyState = () => {
+    // searching but no results
+    if (query) {
+      return (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="search-outline" size={52} color={c.mutedForeground} />
+          <ThemedText textType="headForeground" style={styles.emptyTitle}>
+            No results found
+          </ThemedText>
+          <ThemedText textType="mutedDefault" style={styles.emptySubtitle}>
+            Nothing matched {query}. Try a different search.
+          </ThemedText>
+        </View>
+      );
+    }
+
+    // filtered category but no notes in it
+    if (category !== "All") {
+      return (
+        <View style={styles.emptyContainer}>
+          <Ionicons
+            name="folder-open-outline"
+            size={52}
+            color={c.mutedForeground}
+          />
+          <ThemedText textType="headForeground" style={styles.emptyTitle}>
+            No {category} notes
+          </ThemedText>
+          <ThemedText textType="mutedDefault" style={styles.emptySubtitle}>
+            You haven't added any {category.toLowerCase()} notes yet.
+          </ThemedText>
+        </View>
+      );
+    }
+
+    // completely empty
+    return (
+      <View style={styles.emptyContainer}>
+        <Ionicons
+          name="document-text-outline"
+          size={52}
+          color={c.mutedForeground}
+        />
+        <ThemedText textType="headForeground" style={styles.emptyTitle}>
+          No notes yet
+        </ThemedText>
+        <ThemedText textType="mutedDefault" style={styles.emptySubtitle}>
+          Tap the + button to write your first note.
+        </ThemedText>
+        <TouchableOpacity
+          style={[styles.emptyButton, { backgroundColor: c.accent }]}
+          onPress={() => router.push("/add-notes")}
+        >
+          <ThemedText textType="default" style={styles.emptyButtonText}>
+            Create your first note
+          </ThemedText>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
   return (
     <SafeAreaView
       style={{
@@ -88,10 +159,7 @@ const Notes = function () {
         <View style={styles.header}>
           <ThemedText
             textType="defaultSubHead"
-            style={{
-              marginBottom: 30,
-              marginHorizontal: 20,
-            }}
+            style={{ marginBottom: 30, marginHorizontal: 20 }}
           >
             Notes
           </ThemedText>
@@ -134,20 +202,20 @@ const Notes = function () {
         </View>
 
         <FlatList
-          data={!query ? notes : filteredNotes}
+          data={displayedNotes}
           renderItem={renderItem}
-          keyExtractor={(item) => item.id.toString()} // Unique ID for each item
+          keyExtractor={(item) => item.id.toString()}
           contentContainerStyle={{
             ...styles.goalsList,
             paddingBottom: tabHeight,
+            flexGrow: 1,
           }}
+          ListEmptyComponent={<EmptyState />}
         />
 
         <TouchableOpacity
           style={styles.addGoalButton}
-          onPress={() => {
-            router.push("/add-notes");
-          }}
+          onPress={() => router.push("/add-notes")}
         >
           <Ionicons name="add" size={40} color={c.background} />
         </TouchableOpacity>
@@ -163,12 +231,6 @@ const useStyles = function (scheme: "light" | "dark") {
 
   return StyleSheet.create({
     header: {
-      //   flexDirection: "row",
-      //   justifyContent: "space-between",
-      //   alignItems: "center",
-      // alignContent: "center",
-      //   width: "89%",
-      //   alignSelf: "center",
       marginTop: 20,
     },
     visionBoard: {
@@ -197,23 +259,19 @@ const useStyles = function (scheme: "light" | "dark") {
     dualHorizontal: {
       flexDirection: "row",
       gap: 20,
-      //   paddingRight: 10,
     },
     firstHori: {
       flexDirection: "row",
       justifyContent: "space-between",
-      //   alignSelf: "stretch",
     },
     type: {
       padding: 10,
       backgroundColor: "#2d2d2d",
       borderRadius: 10,
-      //   flex: 1,
     },
     smallText: {
       marginTop: 10,
     },
-
     addGoalButton: {
       justifyContent: "center",
       alignItems: "center",
@@ -226,6 +284,33 @@ const useStyles = function (scheme: "light" | "dark") {
       borderRadius: 30,
       elevation: 5,
       shadowOpacity: 0.3,
+    },
+    emptyContainer: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingTop: 60,
+      gap: 12,
+    },
+    emptyTitle: {
+      fontSize: 22,
+      fontWeight: "bold",
+      textAlign: "center",
+    },
+    emptySubtitle: {
+      textAlign: "center",
+      paddingHorizontal: 24,
+    },
+    emptyButton: {
+      marginTop: 8,
+      paddingVertical: 14,
+      paddingHorizontal: 28,
+      borderRadius: 12,
+    },
+    emptyButtonText: {
+      color: "#fff",
+      fontWeight: "600",
+      fontSize: 16,
     },
   });
 };

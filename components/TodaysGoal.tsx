@@ -44,7 +44,7 @@ const TodaysGoal = function () {
     <View style={styles.tG}>
       <ThemedText textType="defaultSubHead"> today&apos;s goals</ThemedText>
       <View style={styles.progressCardContiners}>
-        {goals.map((each, key) => {
+        {goals.slice(-4).map((each, key) => {
           const title =
             each.title.length > 20
               ? `${each.title.slice(0, 17)}...`
@@ -55,7 +55,7 @@ const TodaysGoal = function () {
               style={styles.progressCard}
               onPress={() =>
                 router.push({
-                  pathname: "/goals/[id]/",
+                  pathname: "/goals/[id]",
                   params: { id: each.id },
                 })
               }

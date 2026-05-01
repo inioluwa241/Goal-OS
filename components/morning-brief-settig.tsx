@@ -1,7 +1,7 @@
 import { scheduleMorningAlarm } from "@/constants/notifications";
 import { Colors } from "@/constants/theme";
 import { saveSetting } from "@/db/crudOperations"; // ✅ import
-import { Stack } from "expo-router";
+import { router, Stack } from "expo-router";
 import { useState } from "react";
 import {
   StyleSheet,
@@ -47,6 +47,7 @@ const MorningBriefSetting = function () {
 
       // ✅ schedule the alarm with the saved time
       await scheduleMorningAlarm(wakeUpTime);
+      router.back();
 
       console.log("Settings saved and alarm scheduled");
     } catch (error) {

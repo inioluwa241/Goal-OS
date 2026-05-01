@@ -3,10 +3,10 @@ import { useState } from "react";
 import {
   ScrollView,
   StyleSheet,
+  Text,
   TouchableOpacity,
   useColorScheme,
 } from "react-native";
-import { ThemedText } from "./themed-text";
 
 interface Props {
   onSelect: (value: number) => void;
@@ -26,7 +26,11 @@ const GoalsFilterBar = function ({ onSelect }: Props) {
   const [activeFilter, setActiveFilter] = useState(filters[0].id);
 
   return (
-    <ScrollView horizontal={true} contentContainerStyle={styles.goalsFilterBar}>
+    <ScrollView
+      horizontal={true}
+      style={{ flexGrow: 0, flexShrink: 0 }} // 👈 add flexShrink: 0
+      contentContainerStyle={styles.goalsFilterBar}
+    >
       {filters.map((filter) => (
         <TouchableOpacity
           key={filter.id}
@@ -39,16 +43,15 @@ const GoalsFilterBar = function ({ onSelect }: Props) {
             activeFilter === filter.id && styles.activeFilter,
           ]}
         >
-          <ThemedText
-            textType="mutedDefault"
+          <Text
             style={{
-              fontSize: 15,
+              fontSize: 13,
               color:
                 activeFilter === filter.id ? c.background : c.mutedForeground,
             }}
           >
             {filter.label}
-          </ThemedText>
+          </Text>
         </TouchableOpacity>
       ))}
     </ScrollView>
@@ -62,14 +65,14 @@ const useStyles = (scheme: "light" | "dark") => {
   return StyleSheet.create({
     goalsFilterBar: {
       flexDirection: "row",
-      gap: 10,
-      //   position: "fixed",
-      padding: 20,
-      minHeight: "12%",
+      gap: 8,
+      paddingHorizontal: 20,
+      paddingVertical: 12,
+      alignItems: "flex-start", // 👈 add this
     },
     filterStyle: {
       backgroundColor: c.card,
-      paddingVertical: 8,
+      paddingVertical: 6, // bring this back
       paddingHorizontal: 15,
       borderRadius: 12,
     },

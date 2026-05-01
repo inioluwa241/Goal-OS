@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "goal-os",
+    "name": "Goal OS",
     "slug": "goal-os",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -13,38 +13,38 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundColor": "#0a0a0a",
+        "foregroundImage": "./assets/images/icon.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "permissions": [
+        "android.permission.SET_WALLPAPER",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.USE_EXACT_ALARM",
+        "android.permission.VIBRATE",
         "USE_FULL_SCREEN_INTENT",
-        "SCHEDULE_EXACT_ALARM",
-        "USE_EXACT_ALARM",
-        "USE_FULL_SCREEN_INTENT",
-        "SCHEDULE_EXACT_ALARM",
-        "USE_EXACT_ALARM"
+        "android.permission.ACCESS_NOTIFICATION_POLICY"
       ],
       "package": "com.luggard.goalos"
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/icon.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/images/icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#0a0a0a",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#0a0a0a"
           }
         }
       ],
@@ -53,9 +53,7 @@
       [
         "expo-notifications",
         {
-          "sounds": [
-            "./assets/alarm.wav"
-          ]
+          "sounds": ["./assets/alarm.wav"]
         }
       ],
       "expo-secure-store"
@@ -69,6 +67,12 @@
       "eas": {
         "projectId": "dc1a6153-9ff9-4b12-914f-16faca6baad0"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/dc1a6153-9ff9-4b12-914f-16faca6baad0"
     }
   }
 }

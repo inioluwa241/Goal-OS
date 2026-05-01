@@ -23,50 +23,8 @@ function claimLocalData(userId: string) {
   }
 }
 
-// async function syncTable(table: string, userId: string) {
-//   const rows = db.getAllSync(`SELECT * FROM ${table} WHERE user_id = ?`, [
-//     userId,
-//   ]) as any[];
-
-//   console.log(`[sync] ${table}: found ${rows.length} rows locally`);
-
-//   if (!rows.length) return;
-
-//   const now = new Date().toISOString();
-
-//   // Generate a UUID for any row whose id is not already a UUID
-//   const uuidRegex =
-//     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-//   const payload = await Promise.all(
-//     rows.map(async (row) => {
-//       const id =
-//         !row.id || !uuidRegex.test(String(row.id))
-//           ? Crypto.randomUUID()
-//           : row.id;
-//       return { ...row, id, synced_at: now };
-//     }),
-//   );
-
-//   const { error } = await supabase.from(table).upsert(payload, {
-//     onConflict: "id",
-//   });
-
-//   if (error) {
-//     console.error(`Failed to sync table "${table}":`, error.message);
-//     throw error;
-//   }
-
-//   db.runSync(`UPDATE ${table} SET synced_at = ? WHERE user_id = ?`, [
-//     now,
-//     userId,
-//   ]);
-// }
-
 export async function syncLocalDataToSupabase(userId: string) {
   claimLocalData(userId);
-  // const goals = db.getAllSync("SELECT id, user_id, title FROM goals");
-  // console.log("[sync] goals after claiming:", JSON.stringify(goals));
   for (const table of TABLES) {
     await syncTable(table, userId);
   }
@@ -76,8 +34,6 @@ async function syncTable(table: string, userId: string) {
   const rows = db.getAllSync(`SELECT * FROM ${table} WHERE user_id = ?`, [
     userId,
   ]) as any[];
-
-  // console.log(`[sync] ${table}: found ${rows.length} rows`);
 
   if (!rows.length) return;
 
@@ -90,17 +46,88 @@ async function syncTable(table: string, userId: string) {
     })),
   );
 
-  // console.log(`[sync] ${table} payload:`, JSON.stringify(payload)); // add this
-
   const { error, data } = await supabase.from(table).upsert(payload, {
     onConflict: "id",
   });
-
-  // console.log(`[sync] ${table} result:`, error ? error.message : "success"); // add this
 
   if (error) {
     console.error(`Failed to sync table "${table}":`, error.message);
     throw error;
   }
-  // ...
+}
+
+// ✅ ONLY THIS FUNCTION CHANGED
+export async function pullFromSupabase(userId: string) {
+  // Step 1: fetch everything from Supabase first
+  const tableData: Record<string, any[]> = {};
+
+  for (const table of TABLES) {
+    const { data, error } = await supabase
+      .from(table)
+      .select("*")
+      .eq("user_id", userId);
+
+    if (error) {
+      console.error(`Failed to pull table "${table}":`, error.message);
+      continue;
+    }
+
+    tableData[table] = data ?? [];
+  }
+  console.log("notes from Supabase:", tableData["notes"]);
+  console.log("Pulling for userId:", userId);
+  console.log("notes from Supabase:", tableData["notes"]);
+
+  // Step 2: sort goals so parents come before children
+  if (tableData["goals"]) {
+    const goals = tableData["goals"];
+    const map = new Map(goals.map((g) => [g.id, g]));
+    const sorted: any[] = [];
+    const visited = new Set<string>();
+
+    function visit(goal: any) {
+      if (visited.has(goal.id)) return;
+      if (goal.parent_id && map.has(goal.parent_id)) {
+        visit(map.get(goal.parent_id));
+      }
+      visited.add(goal.id);
+      sorted.push(goal);
+    }
+
+    goals.forEach(visit);
+    tableData["goals"] = sorted;
+  }
+
+  // Step 3: insert everything with FK checks temporarily off
+  db.execSync(`PRAGMA foreign_keys = OFF`);
+
+  try {
+    for (const table of TABLES) {
+      const rows = tableData[table];
+      if (!rows || !rows.length) continue;
+
+      for (const row of rows) {
+        const columns = Object.keys(row).join(", ");
+        const placeholders = Object.keys(row)
+          .map(() => "?")
+          .join(", ");
+        const values = Object.values(row).map((v) =>
+          v === null || v === undefined
+            ? null
+            : typeof v === "object"
+              ? JSON.stringify(v)
+              : (v as string | number | boolean),
+        );
+        // const notes = db.getAllSync("SELECT * FROM notes");
+        // console.log("Notes in SQLite:", notes);
+
+        db.runSync(
+          `INSERT OR REPLACE INTO ${table} (${columns}) VALUES (${placeholders})`,
+          values,
+        );
+      }
+    }
+  } finally {
+    db.execSync(`PRAGMA foreign_keys = ON`);
+  }
 }

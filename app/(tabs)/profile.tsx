@@ -1,5 +1,7 @@
 import { ThemedView } from "@/components/themed-view";
 import { Colors } from "@/constants/theme";
+import { clearAllData } from "@/db/crudOperations";
+import { getProfile } from "@/services/profile";
 import { supabase } from "@/services/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { Link, router } from "expo-router";
@@ -20,6 +22,7 @@ type SettingRowProps = {
   label: string;
   action?: React.ReactNode;
   isDestructive?: boolean;
+  onPress?: () => void;
 };
 
 const SettingRow = ({
@@ -27,12 +30,13 @@ const SettingRow = ({
   label,
   action,
   isDestructive = false,
+  onPress,
 }: SettingRowProps) => {
   const scheme = useColorScheme() ?? "light";
   const c = Colors[scheme];
   const styles = useStyles(scheme);
 
-  return (
+  const inner = (
     <View style={styles.settingRow}>
       <View style={styles.settingRowLeft}>
         <Ionicons
@@ -52,6 +56,16 @@ const SettingRow = ({
       {action ?? null}
     </View>
   );
+
+  if (onPress) {
+    return (
+      <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
+        {inner}
+      </TouchableOpacity>
+    );
+  }
+
+  return inner;
 };
 
 const Toggle = ({
@@ -84,14 +98,11 @@ const Toggle = ({
   );
 };
 
-// ── Section Header ─────────────────────────────────────────────────────────────
 const SectionHeader = ({ title }: { title: string }) => {
   const scheme = useColorScheme() ?? "light";
   const styles = useStyles(scheme);
   return <Text style={styles.sectionHeader}>{title}</Text>;
 };
-
-// ── Main Component ─────────────────────────────────────────────────────────────
 
 export default function ProfileScreen() {
   const scheme = useColorScheme() ?? "light";
@@ -101,43 +112,62 @@ export default function ProfileScreen() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userName, setUserName] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  const [userUsername, setUserUsername] = useState("");
   const [userInitials, setUserInitials] = useState("");
-
-  const [showNudge, setShowNudge] = useState(!isLoggedIn);
+  const [showNudge, setShowNudge] = useState(true);
   const [morningBrief, setMorningBrief] = useState(true);
   const [goalReminders, setGoalReminders] = useState(true);
   const [darkMode, setDarkMode] = useState(true);
 
+  const fetchProfile = async (userId: string, email: string) => {
+    const profile = await getProfile(userId);
+    if (profile) {
+      const name = profile.full_name ?? email ?? "";
+      setUserName(name);
+      setUserInitials(
+        name
+          .split(" ")
+          .map((n: string) => n[0])
+          .join("")
+          .slice(0, 2)
+          .toUpperCase(),
+      );
+      setUserUsername(profile.username ?? "");
+    }
+  };
+
   useEffect(() => {
-    // Listen whenever auth changes (login, signup, logout)
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       const user = session?.user;
       if (user) {
-        const name = user.user_metadata?.full_name ?? user.email ?? "";
         setIsLoggedIn(true);
+        setShowNudge(false);
         setUserEmail(user.email ?? "");
-        setUserName(name);
-        setUserInitials(name.slice(0, 2).toUpperCase());
+        fetchProfile(user.id, user.email ?? "");
       } else {
         setIsLoggedIn(false);
+        setShowNudge(true);
         setUserEmail("");
         setUserName("");
         setUserInitials("");
+        setUserUsername("");
       }
     });
 
-    return () => subscription.unsubscribe(); // cleanup on unmount
+    return () => subscription.unsubscribe();
   }, []);
+
   const handleLogOut = () => {
     Alert.alert("Log Out", "Are you sure you want to log out?", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Log Out",
         style: "destructive",
-        onPress: () => {
-          // TODO: clear session e.g. supabase.auth.signOut()
+        onPress: async () => {
+          await supabase.auth.signOut();
+          clearAllData();
           router.replace("/(auth)/login");
         },
       },
@@ -153,9 +183,11 @@ export default function ProfileScreen() {
         {
           text: "Delete",
           style: "destructive",
-          onPress: () => {
-            // TODO: delete account logic
-            console.log("Account deleted");
+          onPress: async () => {
+            // TODO: call a Supabase edge function to delete the user
+            // Regular clients cannot delete auth users directly
+            await supabase.auth.signOut();
+            router.replace("/(auth)/login");
           },
         },
       ],
@@ -177,6 +209,9 @@ export default function ProfileScreen() {
               </View>
               <View style={styles.profileInfo}>
                 <Text style={styles.profileName}>{userName}</Text>
+                {userUsername ? (
+                  <Text style={styles.profileUsername}>@{userUsername}</Text>
+                ) : null}
                 <Text style={styles.profileEmail} numberOfLines={1}>
                   {userEmail}
                 </Text>
@@ -211,7 +246,7 @@ export default function ProfileScreen() {
           )}
         </View>
 
-        {/* Nudge Card — guest only */}
+        {/* Nudge Card */}
         {!isLoggedIn && showNudge && (
           <View style={styles.nudgeCard}>
             <View style={styles.nudgeTop}>
@@ -237,7 +272,7 @@ export default function ProfileScreen() {
           <SectionHeader title="NOTIFICATIONS" />
           <View style={styles.sectionBody}>
             <SettingRow
-              icon="notifications-outline"
+              icon="alarm-outline"
               label="Wake-up Time"
               action={
                 <Ionicons
@@ -246,9 +281,12 @@ export default function ProfileScreen() {
                   color={c.mutedForeground}
                 />
               }
+              onPress={() => {
+                /* TODO: navigate to wake-up time screen */
+              }}
             />
             <SettingRow
-              icon="notifications-outline"
+              icon="sunny-outline"
               label="Morning Brief"
               action={
                 <Toggle value={morningBrief} onValueChange={setMorningBrief} />
@@ -286,6 +324,9 @@ export default function ProfileScreen() {
                   color={c.mutedForeground}
                 />
               }
+              onPress={() => {
+                /* TODO */
+              }}
             />
           </View>
         </View>
@@ -304,11 +345,14 @@ export default function ProfileScreen() {
                   color={c.mutedForeground}
                 />
               }
+              onPress={() => {
+                /* TODO */
+              }}
             />
           </View>
         </View>
 
-        {/* Account */}
+        {/* Account — only when logged in */}
         {isLoggedIn && (
           <View style={styles.section}>
             <SectionHeader title="ACCOUNT" />
@@ -323,6 +367,7 @@ export default function ProfileScreen() {
                     color={c.mutedForeground}
                   />
                 }
+                onPress={() => router.push("/edit-profile")}
               />
               <SettingRow
                 icon="lock-closed-outline"
@@ -334,21 +379,20 @@ export default function ProfileScreen() {
                     color={c.mutedForeground}
                   />
                 }
+                onPress={() => router.push("/change-password")}
               />
-              <TouchableOpacity onPress={handleLogOut}>
-                <SettingRow
-                  icon="log-out-outline"
-                  label="Log Out"
-                  isDestructive
-                />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleDeleteAccount}>
-                <SettingRow
-                  icon="trash-outline"
-                  label="Delete Account"
-                  isDestructive
-                />
-              </TouchableOpacity>
+              <SettingRow
+                icon="log-out-outline"
+                label="Log Out"
+                isDestructive
+                onPress={handleLogOut}
+              />
+              <SettingRow
+                icon="trash-outline"
+                label="Delete Account"
+                isDestructive
+                onPress={handleDeleteAccount}
+              />
             </View>
           </View>
         )}
@@ -357,7 +401,6 @@ export default function ProfileScreen() {
   );
 }
 
-// ── Styles ─────────────────────────────────────────────────────────────────────
 const useStyles = (scheme: "light" | "dark") => {
   const c = Colors[scheme];
 
@@ -367,8 +410,6 @@ const useStyles = (scheme: "light" | "dark") => {
       paddingBottom: 100,
       gap: 24,
     },
-
-    // Profile header
     profileHeader: {
       paddingHorizontal: 16,
       paddingVertical: 24,
@@ -394,16 +435,22 @@ const useStyles = (scheme: "light" | "dark") => {
     },
     profileInfo: {
       flex: 1,
-      gap: 4,
+      gap: 2,
     },
     profileName: {
-      fontSize: 25,
+      fontSize: 22,
       fontWeight: "700",
       color: c.foreground,
     },
+    profileUsername: {
+      fontSize: 13,
+      color: c.accent,
+      fontWeight: "500",
+    },
     profileEmail: {
-      fontSize: 15,
+      fontSize: 13,
       color: c.mutedForeground,
+      marginTop: 2,
     },
     createAccountButton: {
       height: 44,
@@ -417,8 +464,6 @@ const useStyles = (scheme: "light" | "dark") => {
       fontWeight: "600",
       fontSize: 16,
     },
-
-    // Nudge card
     nudgeCard: {
       marginHorizontal: 16,
       padding: 16,
@@ -455,15 +500,13 @@ const useStyles = (scheme: "light" | "dark") => {
       fontSize: 12,
       fontWeight: "600",
     },
-
-    // Section
     section: {
       gap: 0,
     },
     sectionHeader: {
       paddingHorizontal: 16,
       paddingVertical: 8,
-      fontSize: 14,
+      fontSize: 11,
       fontWeight: "700",
       color: c.mutedForeground,
       letterSpacing: 1.5,
@@ -472,8 +515,6 @@ const useStyles = (scheme: "light" | "dark") => {
       borderTopWidth: 1,
       borderTopColor: c.border,
     },
-
-    // Setting row
     settingRow: {
       flexDirection: "row",
       alignItems: "center",
@@ -494,8 +535,6 @@ const useStyles = (scheme: "light" | "dark") => {
       fontWeight: "600",
       color: c.foreground,
     },
-
-    // Toggle
     track: {
       width: 50,
       height: 28,
