@@ -106,10 +106,14 @@ const AddGoal = function () {
 
                 // Schedule goal-linked wallpaper reminder if enabled
                 if (reminder && Platform.OS === "android") {
+                  const dateString = selectedDate || initialDateString;
+                  const date = new Date(dateString);
+
                   await scheduleReminder(
                     goalTitle,
-                    9, // default 9am — or wire up a time picker later
-                    0,
+                    date,
+                    date.getHours(), // default 9am — or wire up a time picker later
+                    date.getMinutes(),
                     {
                       title: goalTitle,
                       progress: 0,

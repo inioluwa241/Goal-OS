@@ -12,6 +12,7 @@ import {
   getAllForStreak,
   hasAnyGoals,
   recalculateStreaks,
+  updateAllGoalsOnStatus,
 } from "@/db/crudOperations";
 import db from "@/db/localDataBase";
 import { getProfile } from "@/services/profile";
@@ -109,6 +110,7 @@ export default function Index() {
     }
 
     loadGoals();
+    updateAllGoalsOnStatus();
   }, []);
 
   const isEmpty = !loading && !asoals;

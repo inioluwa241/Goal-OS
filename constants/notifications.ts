@@ -125,6 +125,7 @@ export async function scheduleMorningAlarm(
 // ── Schedule reminder — fires at set time then every 4 hours ───────────────────
 export async function scheduleReminder(
   title: string,
+  newTime: Date,
   hour: number,
   minute: number,
   goalData?: {
@@ -139,9 +140,24 @@ export async function scheduleReminder(
 
   const ids: string[] = [];
 
-  for (let i = 0; i < 3; i++) {
-    const triggerHour = (hour + i * 8) % 24;
+  const getDiff = () => {
+    const diffMs = newTime.getTime() - new Date().getTime();
+    const diffInDay = diffMs / (1000 * 60 * 60 * 24);
+    const diffInHours = diffMs / (1000 * 60 * 60);
+    return [diffInDay, diffInHours];
+  };
 
+  let lastPhase = "";
+  let lastFired: number | null = null;
+
+  function getCheckInterval(diffDay: number) {
+    if (diffDay > 30) return 24 * 60 * 60 * 1000; // check once a day
+    if (diffDay > 7) return 8 * 60 * 60 * 1000; // check after 8 hours
+    if (diffDay > 1) return 60 * 60 * 1000; // check every 10 mins
+    return 60 * 1000; // check every 1 min
+  }
+
+  const ringNotification = async (triggerHour: number) => {
     const id = await Notifications.scheduleNotificationAsync({
       content: {
         title: "⏰ Goal OS Reminder",
@@ -159,7 +175,79 @@ export async function scheduleReminder(
     });
 
     ids.push(id);
-  }
+  };
+
+  const shouldFire = (intervalDays: number) => {
+    if (!lastFired) return true;
+    const sinceLast = Date.now() - lastFired;
+    return sinceLast >= intervalDays * 24 * 60 * 60 * 1000;
+  };
+
+  const evaluate = async function () {
+    const [diffInDay, diffInHours] = getDiff();
+    let currentPhase = "";
+    const now = new Date();
+
+    if (diffInDay > 8) currentPhase = "early";
+    else if (diffInDay <= 8 && diffInDay > 1) currentPhase = "mid";
+    else currentPhase = "final";
+
+    if (currentPhase === "early" && shouldFire(3)) {
+      // ring every 3 days, at current hour
+      await ringNotification(now.getHours());
+      lastFired = Date.now();
+    } else if (currentPhase === "mid" && shouldFire(1)) {
+      // ring every day, at current hour
+      await ringNotification(now.getHours());
+      lastFired = Date.now();
+    } else if (currentPhase === "final") {
+      // schedule pinned at 3hrs before and 12hrs before newTime
+      const minus3hr = new Date(newTime.getTime() - 3 * 60 * 60 * 1000);
+      const minus12hr = new Date(newTime.getTime() - 12 * 60 * 60 * 1000);
+
+      if (diffInHours <= 12 && diffInHours > 3 && shouldFire(0.375)) {
+        // 12hr window — fire if not fired in last 9hrs
+        await ringNotification(minus12hr.getHours());
+        lastFired = Date.now();
+      }
+
+      if (diffInHours <= 3 && shouldFire(0.125)) {
+        // 3hr window — fire if not fired in last 3hrs
+        await ringNotification(minus3hr.getHours());
+        lastFired = Date.now();
+      }
+    }
+
+    if (diffInHours > 0) {
+      setTimeout(() => {
+        evaluate();
+      }, getCheckInterval(diffInDay));
+    }
+  };
+
+  await evaluate();
+
+  // for (let i = 0; i < 3; i++) {
+  //   const triggerHour = (hour + i * 8) % 24;
+
+  //   const id = await Notifications.scheduleNotificationAsync({
+  //     content: {
+  //       title: "⏰ Goal OS Reminder",
+  //       body: goalData?.title ?? title,
+  //       sound: "alarm.wav",
+  //       priority: Notifications.AndroidNotificationPriority.MAX,
+  //       data: goalData ?? {},
+  //     },
+  //     trigger: {
+  //       type: Notifications.SchedulableTriggerInputTypes.DAILY,
+  //       hour: triggerHour,
+  //       minute,
+  //       channelId: ALARM_CHANNEL_ID,
+  //     },
+  //   });
+
+  //   ids.push(id);
+  // }
 
   return ids;
 }

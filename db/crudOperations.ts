@@ -29,6 +29,22 @@ interface newGoal {
   enableReminder: number;
 }
 
+// UPDATE ALL GOAL STATUS
+export function updateAllGoalsOnStatus() {
+  const allGoals = db.getAllSync("SELECT * FROM goals") as Goal[];
+  const presentDate = new Date();
+
+  for (const goal of allGoals) {
+    const goalDate = new Date(goal.due_date ?? new Date().toISOString());
+    if (goalDate <= presentDate && goal.status !== "completed") {
+      db.runSync("UPDATE goals SET status = ? WHERE id = ?", [
+        "failed",
+        goal.id,
+      ]);
+    }
+  }
+}
+
 // GET setting by key
 export function getSetting(key: string): string | null {
   const result = db.getFirstSync<{ value: string }>(

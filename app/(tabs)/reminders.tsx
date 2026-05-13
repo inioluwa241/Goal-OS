@@ -15,8 +15,8 @@ import {
 } from "@/db/crudOperations";
 import { syncLocalDataToSupabase } from "@/services/sync";
 import { Ionicons } from "@expo/vector-icons";
-import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import * as Notifications from "expo-notifications";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -130,7 +130,12 @@ const Reminders = function () {
     const displayTime = formatTime(newTime);
     const isoTime = timeToISO(newTime);
 
-    const notifIds = await scheduleReminder(newTitle.trim(), hour, minute);
+    const notifIds = await scheduleReminder(
+      newTitle.trim(),
+      newTime,
+      hour,
+      minute,
+    );
 
     const id = addReminder({
       title: newTitle.trim(),
