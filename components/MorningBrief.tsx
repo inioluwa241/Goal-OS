@@ -1,6 +1,12 @@
 import { formatDate } from "@/constants/format_date";
 import { Colors } from "@/constants/theme";
-import { getGoalTitleById, getSetting } from "@/db/crudOperations";
+import {
+  getBestStreak,
+  getGoalTitleById,
+  getIncompleteDailyGoals,
+  getSetting,
+  saveSetting,
+} from "@/db/crudOperations";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
@@ -33,6 +39,9 @@ const MorningBrief = function ({
   const [goalsToMap, setGoalsToMap] = useState<{ id: string; title: string }[]>(
     [],
   );
+  const [briefText, setBriefText] = useState<string | null>(null);
+  const [loadingBrief, setLoadingBrief] = useState(false);
+  const [bestStreak, setBestStreak] = useState<number>(0);
 
   useEffect(() => {
     try {
@@ -51,6 +60,89 @@ const MorningBrief = function ({
       setGoalsToMap(selectedGoals);
     }
   }, [selectedGoals]);
+
+  // Generate or load cached morning brief on mount (when viewing the full screen)
+  useEffect(() => {
+    const run = async () => {
+      if (pageRendering === "home") return; // only generate on the full screen
+
+      try {
+        const todayKey = new Date().toISOString().split("T")[0];
+        const cacheKey = `morning_brief_${todayKey}`;
+        const cached = getSetting(cacheKey);
+        if (cached) {
+          setBriefText(cached);
+        } else {
+          setLoadingBrief(true);
+
+          const goals = getIncompleteDailyGoals();
+          const goalNames = goals.map((g) => g.title).filter(Boolean);
+          const streak = getBestStreak();
+          setBestStreak(streak);
+
+          const prompt = `You are a friendly assistant. Today is ${todayKey}. The user's incomplete daily goals are: ${
+            goalNames.length ? goalNames.join(", ") : "(none)"
+          }. The user's best streak is ${streak} days. Write a concise, three-sentence personal morning brief that references the user's actual goal names where appropriate and ends with a single clear action the user can do right now.`;
+
+          try {
+            const res = await fetch(
+              "https://api.grok.com/openai/v1/chat/completions",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${process.env.EXPO_PUBLIC_GROQ_KEY}`,
+                },
+                body: JSON.stringify({
+                  model: "grok-1",
+                  max_tokens: 150,
+                  messages: [{ role: "user", content: prompt }],
+                }),
+              },
+            );
+
+            const data = await res.json();
+
+            // Try a few common response shapes
+            let text = "";
+            if (typeof data === "string") text = data;
+            else if (data.completion) text = data.completion;
+            else if (data.choices && data.choices[0]) {
+              const c = data.choices[0];
+              text = c.message?.content || c.text || JSON.stringify(c);
+            } else if (
+              data.output &&
+              data.output[0] &&
+              data.output[0].content
+            ) {
+              // anthropic-ish
+              const content = data.output[0].content[0];
+              text = content?.text || JSON.stringify(content);
+            } else {
+              text = JSON.stringify(data);
+            }
+
+            const final = String(text).trim();
+            setBriefText(final);
+            try {
+              saveSetting(cacheKey, final);
+            } catch (e) {
+              console.error("Failed to save morning brief cache:", e);
+            }
+          } catch (err) {
+            console.error("Failed to fetch morning brief:", err);
+            setBriefText("Could not generate your morning brief right now.");
+          } finally {
+            setLoadingBrief(false);
+          }
+        }
+      } catch (e) {
+        console.error("Morning brief error:", e);
+      }
+    };
+
+    run();
+  }, [pageRendering]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -95,16 +187,25 @@ const MorningBrief = function ({
       </View>
 
       <Divider />
-      <ThemedText
-        textType="mutedItalics"
-        style={{ textAlign: "center", marginTop: 15 }}
-      >
-        &apos;You have the power to make today extraordinary.&apos;
-      </ThemedText>
+      {loadingBrief ? (
+        <ThemedText textType="mutedItalics" style={{ textAlign: "center" }}>
+          Generating your morning brief...
+        </ThemedText>
+      ) : (
+        <ThemedText
+          textType="default"
+          style={{ textAlign: "left", marginTop: 8 }}
+        >
+          {briefText ?? "'You have the power to make today extraordinary.'"}
+        </ThemedText>
+      )}
 
       <View style={styles.streak}>
         <MaterialCommunityIcons name="fire" size={25} color={"red"} />
-        <ThemedText textType="coloredDefault"> 7-days streak</ThemedText>
+        <ThemedText textType="coloredDefault">
+          {" "}
+          {bestStreak}-days streak
+        </ThemedText>
       </View>
     </TouchableOpacity>
   );

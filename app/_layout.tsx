@@ -6,21 +6,24 @@ import {
 } from "@/constants/notifications";
 import { getSetting } from "@/db/crudOperations";
 import { initialisedDb } from "@/db/initialisedDataBase";
+import { registerStreakCheckTask } from "@/services/backgroundTask";
 import { supabase } from "@/services/supabase";
 import { syncLocalDataToSupabase } from "@/services/sync";
 import { Session } from "@supabase/supabase-js";
 import * as Notifications from "expo-notifications";
-import { router, Stack } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   AppState,
   NativeModules,
+  Platform,
   TurboModuleRegistry,
   View,
 } from "react-native";
 
 export default function RootLayout() {
+  const router = useRouter();
   const [session, setSession] = useState<Session | null | undefined>(undefined);
 
   // add this inside any useEffect that runs on mount
@@ -53,6 +56,19 @@ export default function RootLayout() {
   useEffect(() => {
     initialisedDb();
     setupNotificationChannels();
+    registerStreakCheckTask();
+
+    // Schedule wallpaper alarms for background execution
+    if (Platform.OS === "android") {
+      const WallpaperScheduler = NativeModules.WallpaperScheduler;
+      if (WallpaperScheduler) {
+        WallpaperScheduler.scheduleWallpaperAlarms()
+          .then(() => console.log("✓ Wallpaper alarms scheduled"))
+          .catch((err: Error) =>
+            console.error("Failed to schedule wallpaper alarms:", err),
+          );
+      }
+    }
 
     const resetChannels = async () => {
       await Notifications.deleteNotificationChannelAsync("goalos_alarms");
@@ -79,10 +95,19 @@ export default function RootLayout() {
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener(
       (response) => {
-        const title = response.notification.request.content.title;
-        if (title === "☀️ Good Morning!") {
-          router.push("/(tabs)");
+        const data = response.notification.request.content.data as any;
+
+        if (data?.goalId) {
+          router.push({ pathname: "/goals/[id]", params: { id: data.goalId } });
+          return;
         }
+
+        if (data?.type === "morning_brief" || data?.type === "checkin") {
+          router.push("/(tabs)/index");
+          return;
+        }
+
+        router.push("/(tabs)/index");
       },
     );
     return () => sub.remove();
@@ -102,6 +127,10 @@ export default function RootLayout() {
     <Stack>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="weekly-review-screen"
+        options={{ headerShown: false }}
+      />
       <Stack.Screen name="notes/[id]/index" options={{ headerShown: true }} />
       <Stack.Screen name="notes/[id]/edit" options={{ headerShown: true }} />
       {/* Redirect based on session, rendered as part of the stack */}

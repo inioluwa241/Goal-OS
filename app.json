@@ -56,7 +56,9 @@
           "sounds": ["./assets/alarm.wav"]
         }
       ],
-      "expo-secure-store"
+      ["expo-build-properties"],
+      "expo-secure-store",
+      "expo-build-properties"
     ],
     "experiments": {
       "typedRoutes": true,

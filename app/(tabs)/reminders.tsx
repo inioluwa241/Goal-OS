@@ -135,6 +135,12 @@ const Reminders = function () {
       newTime,
       hour,
       minute,
+      {
+        title: newTitle.trim(),
+        progress: 0,
+        deadline: newTime.toISOString(),
+        quote: "Stay consistent. Every reminder is a step forward.",
+      },
     );
 
     const id = addReminder({

@@ -1,21 +1,35 @@
+import { ProgressCard } from "@/components/ProgressCard";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import Divider from "@/components/UI/divider";
 import ProgressRing from "@/components/UI/ProgressRing";
-import { formatDate } from "@/constants/format_date";
+import { formatDate, getRelativeDate } from "@/constants/format_date";
 import { Colors } from "@/constants/theme";
 import {
+  addGoal,
+  addProgressLog,
   addReflection,
+  deleteGoal,
   getGoalTitleById,
+  getProgressLogs,
   getReflectionsForGoal,
   getUserById,
   markDailyGoalDone,
+  ProgressLog,
   updateGoalProgress,
 } from "@/db/crudOperations";
 import { Ionicons } from "@expo/vector-icons";
-import { router, Stack, useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
 import {
+  router,
+  Stack,
+  useFocusEffect,
+  useLocalSearchParams,
+} from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -25,6 +39,7 @@ import {
   View,
 } from "react-native";
 
+import ConfirmationModal from "@/components/UI/confirmation-modal";
 type Goal = {
   id: string;
   title: string;
@@ -55,13 +70,26 @@ export default function GoalDetailScreen() {
 
   const [parentTitle, setParentTitle] = useState<string | null>("");
   const [reminderEnabled, setReminderEnabled] = useState(true);
+  const [showPlanModal, setShowPlanModal] = useState(false);
+  const [loadingPlan, setLoadingPlan] = useState(false);
+  const [planTasks, setPlanTasks] = useState<
+    {
+      text: string;
+      checked: boolean;
+    }[]
+  >([]);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const progressCardRef = useRef<ViewShot>(null);
 
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const goal = getUserById(id) as Goal;
 
-  if (goal.parent_id) {
-    const parentGoalTitle = getGoalTitleById(goal.parent_id);
-    setParentTitle(parentGoalTitle);
-  }
+  useEffect(() => {
+    if (goal.parent_id) {
+      const parentGoalTitle = getGoalTitleById(goal.parent_id);
+      setParentTitle(parentGoalTitle);
+    }
+  }, [goal.parent_id]);
 
   const labels = ["", "Daily", "Weekly", "Monthly", "Yearly"];
   const isDaily = goal.type === 1;
@@ -74,7 +102,21 @@ export default function GoalDetailScreen() {
   const handleMarkDone = () => {
     setProgress(100);
     setIsComplete(true);
-    isDaily ? markDailyGoalDone(id) : updateGoalProgress(id, 100);
+    if (isDaily) {
+      markDailyGoalDone(id);
+      try {
+        addProgressLog(id, null, 100);
+      } catch (e) {
+        console.error("Failed to add progress log:", e);
+      }
+    } else {
+      updateGoalProgress(id, 100);
+      try {
+        addProgressLog(id, null, 100);
+      } catch (e) {
+        console.error("Failed to add progress log:", e);
+      }
+    }
   };
 
   // in handleProgressIncrease / handleProgressDecrease, call after setting state
@@ -82,14 +124,29 @@ export default function GoalDetailScreen() {
     const newProgress = Math.min(progress + 10, 100);
     setProgress(newProgress);
     updateGoalProgress(id, newProgress);
+    try {
+      addProgressLog(id, null, newProgress);
+    } catch (e) {
+      console.error("Failed to add progress log:", e);
+    }
   };
 
   const handleProgressDecrease = () => {
     const newProgress = Math.max(progress - 10, 0);
     setProgress(newProgress);
     updateGoalProgress(id, newProgress);
+    try {
+      addProgressLog(id, null, newProgress);
+    } catch (e) {
+      console.error("Failed to add progress log:", e);
+    }
   };
 
+  const handleDeleteGoal = () => {
+    deleteGoal(id);
+    setShowDeleteModal(false);
+    router.back();
+  };
   // ── Reflections ───────────────────────────────────────────────────────────────
   const [reflections, setReflections] = useState<Reflection[]>([]);
   const [showReflectionInput, setShowReflectionInput] = useState(false);
@@ -130,6 +187,19 @@ export default function GoalDetailScreen() {
 
     loadReflections();
   }, [id]); // Added [id] here so it reloads if the goal changes
+
+  const [progressLogs, setProgressLogs] = useState<ProgressLog[]>([]);
+
+  useFocusEffect(
+    useCallback(() => {
+      try {
+        const loaded = getProgressLogs(id);
+        setProgressLogs(loaded);
+      } catch (e) {
+        console.error("Failed to load progress logs:", e);
+      }
+    }, [id]),
+  );
 
   return (
     <ThemedView style={{ flex: 1 }}>
@@ -285,6 +355,91 @@ export default function GoalDetailScreen() {
 
           <Divider />
 
+          {(goal.type === 3 || goal.type === 4) && (
+            <View style={styles.section}>
+              <TouchableOpacity
+                style={styles.planButton}
+                activeOpacity={0.8}
+                onPress={async () => {
+                  setPlanError(null);
+                  setLoadingPlan(true);
+                  setShowPlanModal(true);
+                  try {
+                    const prompt = `Goal title: ${goal.title}\nReason: ${goal.reason ?? "No reason provided."}\nCurrent progress: ${goal.progress_value}%. Return ONLY a JSON array of 3-5 weekly task strings that help decompose this goal for the coming week.`;
+                    const response = await fetch(
+                      "https://api.groq.com/openai/v1/chat/completions",
+                      {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                          Authorization: `Bearer ${process.env.EXPO_PUBLIC_GROQ_KEY}`,
+                        },
+                        body: JSON.stringify({
+                          model: "llama-3.3-70b-versatile",
+                          max_tokens: 150,
+                          messages: [{ role: "user", content: prompt }],
+                        }),
+                      },
+                    );
+                    console.log(response);
+                    const raw = await response.json();
+                    const text = raw.choices?.[0]?.message?.content ?? "";
+
+                    const firstBracket = text.indexOf("[");
+
+                    const lastBracket = text.lastIndexOf("]");
+
+                    const jsonText =
+                      firstBracket !== -1 &&
+                      lastBracket !== -1 &&
+                      lastBracket > firstBracket
+                        ? text.substring(firstBracket, lastBracket + 1)
+                        : text;
+                    const parsed = JSON.parse(jsonText);
+                    if (!Array.isArray(parsed)) {
+                      throw new Error("Expected JSON array");
+                    }
+                    const tasks = parsed
+                      .slice(0, 5)
+                      .map((item) => ({
+                        text: String(item),
+                        checked: true,
+                      }))
+                      .filter((task) => task.text.trim().length > 0);
+                    if (tasks.length === 0) {
+                      throw new Error("No tasks returned");
+                    }
+                    setPlanTasks(tasks);
+                  } catch (err) {
+                    console.error("Plan This Week error:", err);
+                    setPlanError(
+                      "Could not generate weekly tasks. Try again later.",
+                    );
+                  } finally {
+                    setLoadingPlan(false);
+                  }
+                }}
+              >
+                <Text style={styles.planButtonText}>Plan This Week</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <Divider />
+
+          {/* ── Share Progress Card ── */}
+          <View style={styles.section}>
+            <ProgressCard
+              ref={progressCardRef}
+              title={goal.title}
+              progress={progress}
+              streak={goal.streak}
+              goalType={goal.type}
+            />
+          </View>
+
+          <Divider />
+
           {/* ── Details ── */}
           <View style={styles.section}>
             <ThemedText textType="mutedDefault" style={styles.sectionLabel}>
@@ -402,6 +557,32 @@ export default function GoalDetailScreen() {
 
           <Divider />
 
+          {/* ── Progress History ── */}
+          <View style={styles.section}>
+            <ThemedText textType="mutedDefault" style={styles.sectionLabel}>
+              PROGRESS HISTORY
+            </ThemedText>
+
+            {progressLogs.length === 0 ? (
+              <Text style={styles.emptyReflections}>
+                No progress logged yet.
+              </Text>
+            ) : (
+              progressLogs.map((pl) => (
+                <View key={pl.id} style={styles.reflectionCard}>
+                  <Text style={styles.reflectionDate}>
+                    {getRelativeDate(pl.logged_at)}
+                  </Text>
+                  <Text style={styles.reflectionContent}>
+                    {pl.progress_value}%
+                  </Text>
+                </View>
+              ))
+            )}
+          </View>
+
+          <Divider />
+
           {/* ── Reminder Settings ── */}
           <View style={styles.section}>
             <ThemedText textType="mutedDefault" style={styles.sectionLabel}>
@@ -452,11 +633,120 @@ export default function GoalDetailScreen() {
           <TouchableOpacity
             style={styles.deleteButton}
             activeOpacity={0.8}
-            onPress={() => console.log("Delete goal:", id)}
+            onPress={() => setShowDeleteModal(true)}
           >
             <Ionicons name="trash-outline" size={16} color="#f87171" />
             <Text style={styles.deleteButtonText}>Delete Goal</Text>
           </TouchableOpacity>
+          <ConfirmationModal
+            visible={showDeleteModal}
+            title="Delete Goal?"
+            message={`Are you sure you want to delete "${goal.title}"? This action cannot be undone.`}
+            confirmText="Delete"
+            cancelText="Cancel"
+            isDangerous={true}
+            onConfirm={handleDeleteGoal}
+            onCancel={() => setShowDeleteModal(false)}
+          />
+
+          <Modal
+            visible={showPlanModal}
+            animationType="slide"
+            transparent
+            onRequestClose={() => setShowPlanModal(false)}
+          >
+            <View style={styles.modalContainer}>
+              <View style={styles.modalSheet}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Weekly Plan</Text>
+                  <TouchableOpacity onPress={() => setShowPlanModal(false)}>
+                    <Text style={styles.modalClose}>Close</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {loadingPlan ? (
+                  <View style={{ paddingVertical: 24 }}>
+                    <ActivityIndicator size="large" color={c.accent} />
+                  </View>
+                ) : planError ? (
+                  <Text style={styles.planErrorText}>{planError}</Text>
+                ) : planTasks.length === 0 ? (
+                  <Text style={styles.planEmptyText}>
+                    Press Plan This Week to generate weekly tasks.
+                  </Text>
+                ) : (
+                  planTasks.map((task, index) => (
+                    <TouchableOpacity
+                      key={index}
+                      style={styles.taskRow}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setPlanTasks((prev) =>
+                          prev.map((item, idx) =>
+                            idx === index
+                              ? { ...item, checked: !item.checked }
+                              : item,
+                          ),
+                        );
+                      }}
+                    >
+                      <View
+                        style={[
+                          styles.checkbox,
+                          task.checked && styles.checkedBox,
+                        ]}
+                      />
+                      <Text style={styles.taskText}>{task.text}</Text>
+                    </TouchableOpacity>
+                  ))
+                )}
+
+                <View style={styles.modalFooter}>
+                  <TouchableOpacity
+                    style={styles.modalButton}
+                    activeOpacity={0.8}
+                    onPress={async () => {
+                      const selectedItems = planTasks.filter(
+                        (task) => task.checked,
+                      );
+                      if (selectedItems.length === 0) {
+                        Alert.alert(
+                          "Select tasks",
+                          "Please choose at least one task to create as weekly goals.",
+                        );
+                        return;
+                      }
+                      try {
+                        for (const task of selectedItems) {
+                          addGoal({
+                            title: task.text,
+                            description: null,
+                            type: 2,
+                            parentID: id,
+                            reason: goal.reason ?? "Weekly task",
+                            dueDate: null,
+                            enableReminder: 0,
+                          });
+                        }
+                        setShowPlanModal(false);
+                        router.push("/(tabs)/goals");
+                      } catch (err) {
+                        console.error("Failed to create weekly goals:", err);
+                        Alert.alert(
+                          "Error",
+                          "Could not save weekly goals. Please try again.",
+                        );
+                      }
+                    }}
+                  >
+                    <Text style={styles.modalButtonText}>
+                      Create Selected Tasks
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
         </ScrollView>
       </View>
     </ThemedView>
@@ -702,6 +992,97 @@ const useStyles = (scheme: "light" | "dark") => {
       fontSize: 14,
       fontWeight: "600",
       color: "#f87171",
+    },
+    planButton: {
+      paddingVertical: 14,
+      paddingHorizontal: 16,
+      backgroundColor: c.accent,
+      borderRadius: 16,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    planButtonText: {
+      color: "#fff",
+      fontSize: 15,
+      fontWeight: "700",
+    },
+    modalContainer: {
+      flex: 1,
+      justifyContent: "flex-end",
+      backgroundColor: "rgba(0, 0, 0, 0.35)",
+    },
+    modalSheet: {
+      backgroundColor: c.card,
+      borderTopLeftRadius: 20,
+      borderTopRightRadius: 20,
+      padding: 20,
+      maxHeight: "75%",
+    },
+    modalHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 16,
+    },
+    modalTitle: {
+      fontSize: 18,
+      fontWeight: "700",
+      color: c.foreground,
+    },
+    modalClose: {
+      fontSize: 14,
+      color: c.accent,
+      fontWeight: "700",
+    },
+    taskRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: c.border,
+    },
+    checkbox: {
+      width: 22,
+      height: 22,
+      borderRadius: 6,
+      borderWidth: 2,
+      borderColor: c.border,
+    },
+    checkedBox: {
+      backgroundColor: c.accent,
+      borderColor: c.accent,
+    },
+    taskText: {
+      flex: 1,
+      color: c.foreground,
+      fontSize: 15,
+      lineHeight: 22,
+    },
+    modalFooter: {
+      marginTop: 18,
+    },
+    modalButton: {
+      backgroundColor: c.accent,
+      paddingVertical: 14,
+      borderRadius: 14,
+      alignItems: "center",
+    },
+    modalButtonText: {
+      color: "#fff",
+      fontSize: 15,
+      fontWeight: "700",
+    },
+    planErrorText: {
+      color: "#f87171",
+      marginVertical: 12,
+      textAlign: "center",
+    },
+    planEmptyText: {
+      color: c.mutedForeground,
+      fontSize: 14,
+      textAlign: "center",
+      paddingVertical: 24,
     },
   });
 };

@@ -5,6 +5,7 @@ import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import TodaysGoal from "@/components/TodaysGoal";
 import { formatDate } from "@/constants/format_date";
+import { scheduleDailyEngagementNotifications } from "@/constants/notifications";
 import { Colors } from "@/constants/theme";
 import {
   computeHealthScore,
@@ -96,6 +97,7 @@ export default function Index() {
           getAllForDailyTitle(),
           getAllForStreak(),
         ]);
+        await scheduleDailyEngagementNotifications(daily[0]?.title);
         const score = computeHealthScore();
         setGoals(daily);
         // console.log("omooooooooooo", streaks);
@@ -164,7 +166,7 @@ export default function Index() {
             </View>
           ) : (
             <>
-              {goals.length && (
+              {goals.length > 0 && (
                 <MorningBrief pageRendering="home" selectedGoals={goals} />
               )}
               <TodaysGoal />

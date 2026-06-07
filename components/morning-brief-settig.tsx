@@ -1,6 +1,6 @@
 import { scheduleMorningAlarm } from "@/constants/notifications";
 import { Colors } from "@/constants/theme";
-import { saveSetting } from "@/db/crudOperations"; // ✅ import
+import { getSetting, saveSetting } from "@/db/crudOperations"; // ✅ import
 import { router, Stack } from "expo-router";
 import { useState } from "react";
 import {
@@ -46,7 +46,9 @@ const MorningBriefSetting = function () {
       saveSetting("morning_brief_show_streak", JSON.stringify(showStreak));
 
       // ✅ schedule the alarm with the saved time
-      await scheduleMorningAlarm(wakeUpTime);
+      const userName =
+        getSetting("display_name") ?? getSetting("user_name") ?? undefined;
+      await scheduleMorningAlarm(wakeUpTime, userName);
       router.back();
 
       console.log("Settings saved and alarm scheduled");

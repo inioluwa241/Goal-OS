@@ -5,7 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Link, router } from "expo-router";
 import { useState } from "react";
 
-import { saveSetting } from "@/db/crudOperations";
+import { saveSetting, seedDemoGoals } from "@/db/crudOperations";
 import { supabase } from "@/services/supabase";
 import { syncLocalDataToSupabase } from "@/services/sync";
 
@@ -83,11 +83,18 @@ export default function SignUpScreen() {
         return;
       }
 
-      // Claim all anonymous local data and sync to Supabase
-      await syncLocalDataToSupabase(userId);
-
       // Save user_id locally for future use
       saveSetting("user_id", userId);
+
+      // Seed demo goals (runs once) then sync local data
+      try {
+        seedDemoGoals(userId);
+      } catch (err) {
+        console.error("Error seeding demo goals:", err);
+      }
+
+      // Claim all anonymous local data and sync to Supabase
+      await syncLocalDataToSupabase(userId);
 
       router.replace("/(tabs)");
     } catch (error) {

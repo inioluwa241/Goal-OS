@@ -24,6 +24,14 @@ function claimLocalData(userId: string) {
 }
 
 export async function syncLocalDataToSupabase(userId: string) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) {
+    console.log("No active session, skipping sync");
+    return;
+  }
+
   claimLocalData(userId);
   for (const table of TABLES) {
     await syncTable(table, userId);
@@ -46,7 +54,7 @@ async function syncTable(table: string, userId: string) {
     })),
   );
 
-  const { error, data } = await supabase.from(table).upsert(payload, {
+  const { error } = await supabase.from(table).upsert(payload, {
     onConflict: "id",
   });
 
@@ -54,9 +62,55 @@ async function syncTable(table: string, userId: string) {
     console.error(`Failed to sync table "${table}":`, error.message);
     throw error;
   }
+  // After upserting local rows, remove remote rows that no longer exist locally.
+  try {
+    const { data: remoteRows, error: fetchErr } = await supabase
+      .from(table)
+      .select("id")
+      .eq("user_id", userId);
+
+    if (fetchErr) {
+      console.warn(
+        `Could not fetch remote ids for table "${table}":`,
+        fetchErr.message,
+      );
+    } else if (Array.isArray(remoteRows)) {
+      const remoteIds = remoteRows.map((r: any) => String(r.id));
+      const localIds = rows.map((r: any) => String(r.id));
+      const idsToDelete = remoteIds.filter(
+        (id: string) => !localIds.includes(id),
+      );
+
+      if (idsToDelete.length) {
+        // delete in chunks to avoid very large queries
+        const chunkSize = 200;
+        for (let i = 0; i < idsToDelete.length; i += chunkSize) {
+          const chunk = idsToDelete.slice(i, i + chunkSize);
+          const { error: delErr } = await supabase
+            .from(table)
+            .delete()
+            .in("id", chunk)
+            .eq("user_id", userId);
+
+          if (delErr) {
+            console.error(
+              `Failed to delete remote rows for table "${table}":`,
+              delErr.message,
+            );
+          } else {
+            console.log(`Deleted ${chunk.length} remote rows from ${table}`);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error(
+      `Error while cleaning remote deletions for table "${table}":`,
+      e,
+    );
+  }
 }
 
-// ✅ ONLY THIS FUNCTION CHANGED
 export async function pullFromSupabase(userId: string) {
   // Step 1: fetch everything from Supabase first
   const tableData: Record<string, any[]> = {};
@@ -118,8 +172,6 @@ export async function pullFromSupabase(userId: string) {
               ? JSON.stringify(v)
               : (v as string | number | boolean),
         );
-        // const notes = db.getAllSync("SELECT * FROM notes");
-        // console.log("Notes in SQLite:", notes);
 
         db.runSync(
           `INSERT OR REPLACE INTO ${table} (${columns}) VALUES (${placeholders})`,

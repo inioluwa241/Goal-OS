@@ -293,6 +293,18 @@ export default function ProfileScreen() {
               }
             />
             <SettingRow
+              icon="calendar-outline"
+              label="Weekly Review"
+              action={
+                <Ionicons
+                  name="chevron-forward"
+                  size={20}
+                  color={c.mutedForeground}
+                />
+              }
+              onPress={() => router.push("/weekly-review-screen")}
+            />
+            <SettingRow
               icon="notifications-outline"
               label="Goal Reminders"
               action={

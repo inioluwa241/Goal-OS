@@ -102,18 +102,20 @@ const AddGoal = function () {
                   return;
                 }
 
-                addGoal(newGoalData);
+                const goalId = addGoal(newGoalData);
 
                 // Schedule goal-linked wallpaper reminder if enabled
                 if (reminder && Platform.OS === "android") {
                   const dateString = selectedDate || initialDateString;
                   const date = new Date(dateString);
+                  const triggerHour = 9;
+                  const triggerMinute = 0;
 
                   await scheduleReminder(
                     goalTitle,
                     date,
-                    date.getHours(), // default 9am — or wire up a time picker later
-                    date.getMinutes(),
+                    triggerHour,
+                    triggerMinute,
                     {
                       title: goalTitle,
                       progress: 0,
@@ -121,6 +123,7 @@ const AddGoal = function () {
                       quote:
                         goalReason ||
                         "You have the power to make today extraordinary.",
+                      goalId: goalId ?? "",
                     },
                   );
                 }
